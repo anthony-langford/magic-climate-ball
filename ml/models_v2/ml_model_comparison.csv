@@ -1,0 +1,6 @@
+model,Avg_MAE,Std_MAE,N_Forecasts,Median_MAE,Model_Name
+ridge,0.003,0.002,173,0.002,Ridge Regression
+gradient_boosting,0.164,0.136,173,0.135,Gradient Boosting
+neural_network,0.173,0.138,173,0.134,Neural Network
+elastic_net,0.463,0.38,173,0.373,Elastic Net
+random_forest,0.837,0.839,173,0.625,Random Forest
