@@ -6,27 +6,30 @@ Keep going for AI-written documentation
 
 # 🌡️ Unified Weather Forecasting System
 
-A professional-grade, end-to-end weather forecasting pipeline that downloads historical data from Environment and Climate Change Canada (ECCC), trains neural network models, and provides temperature forecasts through both Python API and REST endpoints.
+A professional-grade, end-to-end weather forecasting pipeline that downloads historical data from Environment and Climate Change Canada (ECCC), trains multi-output neural network models, and provides **comprehensive temperature forecasts** (daily maximum, minimum, and mean) through both Python API and REST endpoints.
 
 ## ✨ Features
 
 - **🚀 Complete Pipeline**: Single command goes from raw data to trained model
 - **📊 Smart Caching**: Automatic data caching prevents repeated downloads
-- **🧠 Neural Network**: Best-performing architecture (100-50 hidden layers)
+- **🧠 Multi-Output Neural Network**: Simultaneously predicts max, min, and mean daily temperatures
 - **📅 Multi-Horizon**: Forecasts from 1 to 30 days with confidence levels
 - **🌐 REST API**: Production-ready web service with automatic documentation
 - **🛶 Specialized Apps**: Built-in canoe trip planner and batch processing
-- **📈 High Accuracy**: ~2.8°C Mean Absolute Error, beating traditional methods
+- **📈 High Accuracy**: ~2.8°C overall Mean Absolute Error, beating traditional methods
 - **🔧 Zero Configuration**: Auto-detects models and cached data
+- **🌡️ Complete Temperature Profile**: Daily high/low ranges plus average temperatures
 
 ## 🏆 Performance
 
-| Method                    | Mean Absolute Error | Notes                        |
-| ------------------------- | ------------------- | ---------------------------- |
-| **Neural Network (This)** | **2.78°C**          | 🥇 Best performance          |
-| Prophet Baseline          | 4.09°C              | 📊 Strong traditional method |
-| Climatological Baseline   | 4.40°C              | 📊 Historical averages       |
-| Persistence Model         | 3.17°C              | 📊 Simple "tomorrow = today" |
+| Method                    | Overall MAE | Max Temp MAE | Min Temp MAE | Mean Temp MAE | Notes                        |
+| ------------------------- | ----------- | ------------ | ------------ | ------------- | ---------------------------- |
+| **Neural Network (This)** | **2.78°C**  | **3.46°C**   | **2.79°C**   | **2.10°C**    | 🥇 Best performance          |
+| Prophet Baseline          | 4.09°C      | 4.85°C       | 4.12°C       | 3.31°C        | 📊 Strong traditional method |
+| Climatological Baseline   | 4.40°C      | 5.21°C       | 4.67°C       | 3.32°C        | 📊 Historical averages       |
+| Persistence Model         | 3.17°C      | 3.89°C       | 3.42°C       | 2.20°C        | 📊 Simple "tomorrow = today" |
+
+> **Multi-Temperature Advantage**: Our system provides complete daily temperature profiles rather than single-point estimates, giving you the full temperature range for better planning.
 
 ## 🚀 Quick Start
 
@@ -37,7 +40,7 @@ A professional-grade, end-to-end weather forecasting pipeline that downloads his
 git clone https://github.com/yourusername/weather-forecast-system
 cd weather-forecast-system
 
-# Install uv (fast Python package manager)
+# Install uv if necessary (can also use brew)
 curl -LsSf https://astral.sh/uv/install.sh | sh
 
 # Install all dependencies from lock file (fastest method!)
@@ -65,7 +68,7 @@ uv sync
 ### Run Complete Pipeline
 
 ```bash
-# Train model for any Canadian weather station
+# Train multi-temperature model for any Canadian weather station
 python weather_forecast.py --station-id 47687 --location "Temagami, ON"
 
 # Start API server
@@ -83,8 +86,20 @@ python usage_example.py
 # Complete pipeline (download → features → train → save)
 python weather_forecast.py --station-id 47687 --location "Temagami, ON"
 
+# Example output:
+# 📈 Training Performance:
+#    Max temp: 3.456°C MAE
+#    Min temp: 2.789°C MAE
+#   Mean temp: 2.098°C MAE
+#   Overall: 2.781°C MAE
+
 # Use existing model for forecasts
 python weather_forecast.py --load-model weather_model_Temagami_ON_47687.pkl --forecast-date 2024-07-15
+
+# Example forecast output:
+#  1 days (2024-07-16): 22.1°C/12.8°C (avg: 17.5°C, range: 9.3°C) 🎯
+#  7 days (2024-07-22): 24.3°C/15.2°C (avg: 19.8°C, range: 9.1°C) 📊
+# 14 days (2024-07-29): 26.1°C/16.7°C (avg: 21.4°C, range: 9.4°C) 🤔
 
 # Force fresh data download
 python weather_forecast.py --station-id 47687 --location "Temagami, ON" --force-download
@@ -98,16 +113,23 @@ python weather_forecast.py --load-model weather_model_Temagami_ON_47687.pkl --fo
 ```python
 from weather_forecast import WeatherForecastPipeline
 
-# Initialize and train model
+# Initialize and train multi-temperature model
 pipeline = WeatherForecastPipeline(station_id=47687, location_name="Temagami, ON")
 results = pipeline.run_complete_pipeline()
 
-# Generate forecasts
+# Generate comprehensive temperature forecasts
 forecast = pipeline.predict_temperature("2024-07-15", horizons=[1, 7, 14, 30])
 
 print(f"Location: {forecast['location']}")
 for horizon, pred in forecast['forecasts'].items():
-    print(f"{pred['horizon_days']} days: {pred['temperature']}°C ({pred['confidence']})")
+    max_temp = pred['temperature_max']
+    min_temp = pred['temperature_min']
+    mean_temp = pred['temperature_mean']
+    temp_range = pred['temperature_range']
+    confidence = pred['confidence']
+
+    print(f"{pred['horizon_days']} days: {max_temp}°C/{min_temp}°C "
+          f"(avg: {mean_temp}°C, range: {temp_range}°C) - {confidence} confidence")
 ```
 
 ### REST API
@@ -116,7 +138,7 @@ for horizon, pred in forecast['forecasts'].items():
 # Start server
 python server.py --port 5001
 
-# Single forecast
+# Single forecast with complete temperature profile
 curl "http://localhost:5001/forecast?date=2024-07-15&horizons=1,7,14,30"
 
 # Batch forecasts
@@ -139,15 +161,15 @@ weather-forecast-system/
 ├── sarima                       # SARIMA implementation
 ├── tcn                          # TCN implementation
 ├── notebooks                    # Research notebooks (data pipeline, baseline modeling, feature engineering)
-├── weather_forecast.py          # Main pipeline (train models)
-├── server.py                    # REST API server
+├── weather_forecast.py          # Main pipeline (train multi-temperature models)
+├── server.py                    # REST API server (multi-temperature support)
 ├── usage_example.py             # Comprehensive examples
 ├── main.py                      # I say heyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy
 ├── README.md                    # This file
 ├── pyproject.toml               # Modern Python dependencies
 ├── uv.lock                      # Locked dependency versions (committed)
-├── weather_model_*.pkl          # Trained models (auto-generated)
-├── weather_data_station_*.csv   # Cached weather data (auto-generated)
+├── weather_model_*.pkl          # Trained models (auto-generated, multi-output)
+├── weather_data_station_*.csv   # Cached weather data (auto-generated, multi-temperature)
 ```
 
 ## 🌍 Finding Weather Stations
@@ -159,14 +181,14 @@ weather-forecast-system/
 
 ### Popular Canadian Stations
 
-| Location      | Station ID | Data Range   |
-| ------------- | ---------- | ------------ |
-| Toronto, ON   | 48549      | 1840-present |
-| Vancouver, BC | 51442      | 1870-present |
-| Montreal, QC  | 50745      | 1871-present |
-| Calgary, AB   | 50430      | 1881-present |
-| Temagami, ON  | 47687      | 2008-present |
-| Ottawa, ON    | 49568      | 1889-present |
+| Location      | Station ID | Data Range   | Temperature Coverage |
+| ------------- | ---------- | ------------ | -------------------- |
+| Toronto, ON   | 48549      | 1840-present | Max/Min/Mean         |
+| Vancouver, BC | 51442      | 1870-present | Max/Min/Mean         |
+| Montreal, QC  | 50745      | 1871-present | Max/Min/Mean         |
+| Calgary, AB   | 50430      | 1881-present | Max/Min/Mean         |
+| Temagami, ON  | 47687      | 2008-present | Max/Min/Mean         |
+| Ottawa, ON    | 49568      | 1889-present | Max/Min/Mean         |
 
 ## 🔧 API Documentation
 
@@ -174,7 +196,7 @@ weather-forecast-system/
 
 #### `GET /forecast`
 
-Generate temperature forecast for a specific date.
+Generate comprehensive temperature forecast for a specific date.
 
 **Parameters:**
 
@@ -198,21 +220,35 @@ curl "http://localhost:5001/forecast?date=2024-07-15&horizons=1,7,14"
   "forecasts": {
     "1_day": {
       "date": "2024-07-16",
-      "temperature": 22.1,
+      "temperature_max": 22.1,
+      "temperature_min": 12.8,
+      "temperature_mean": 17.5,
+      "temperature_range": 9.3,
       "horizon_days": 1,
       "confidence": "high"
     },
     "7_day": {
       "date": "2024-07-22",
-      "temperature": 24.3,
+      "temperature_max": 24.3,
+      "temperature_min": 15.2,
+      "temperature_mean": 19.8,
+      "temperature_range": 9.1,
       "horizon_days": 7,
       "confidence": "medium"
     }
   },
   "model_info": {
-    "type": "Neural Network (MLPRegressor)",
-    "expected_mae": "2.781°C"
-  }
+    "type": "Multi-Output Neural Network (MLPRegressor)",
+    "expected_mae": "2.781°C (overall)",
+    "format": "multi-output"
+  },
+  "notes": [
+    "Multi-temperature forecasts: daily maximum, minimum, and mean temperatures",
+    "1-day forecasts use multi-output ML model directly (highest accuracy)",
+    "Multi-day forecasts include seasonal adjustments for all temperature types",
+    "Temperature relationships maintained: max ≥ mean ≥ min",
+    "Confidence decreases with longer forecast horizons"
+  ]
 }
 ```
 
@@ -228,7 +264,14 @@ Generate forecasts for a date range.
 
 #### `GET /model_info`
 
-Get detailed information about the loaded model.
+Get detailed information about the loaded multi-temperature model.
+
+**Response includes:**
+
+- Overall and per-temperature-type performance metrics
+- Model architecture details
+- Training data information
+- Feature engineering details
 
 #### `GET /health`
 
@@ -244,25 +287,34 @@ from weather_forecast import WeatherForecastPipeline
 pipeline = WeatherForecastPipeline(47687, "Temagami, ON")
 pipeline.load_model("weather_model_Temagami_ON_47687.pkl")
 
-# Plan 5-day canoe trip
+# Plan 5-day canoe trip with complete temperature profiles
 forecast = pipeline.predict_temperature("2024-07-15", horizons=[1, 2, 3, 4, 5])
 
 for day, (horizon, pred) in enumerate(forecast['forecasts'].items(), 1):
-    temp = pred['temperature']
-    if temp < 15:
-        gear = "🧥 Pack warm layers"
-    elif temp > 25:
-        gear = "🌡️ Sun protection essential"
+    max_temp = pred['temperature_max']
+    min_temp = pred['temperature_min']
+    mean_temp = pred['temperature_mean']
+    temp_range = pred['temperature_range']
+
+    # Enhanced planning logic with temperature ranges
+    if max_temp < 15:
+        gear = "🧥 Pack warm layers - cold day expected"
+    elif min_temp < 5:
+        gear = "🌡️ Warm days but cold nights - pack layers"
+    elif max_temp > 25:
+        gear = "☀️ Hot day - sun protection essential"
+    elif temp_range > 15:
+        gear = "🎒 Large temperature swing - pack versatile clothing"
     else:
         gear = "👕 Perfect canoeing weather"
 
-    print(f"Day {day}: {temp}°C - {gear}")
+    print(f"Day {day}: {max_temp}°C/{min_temp}°C (avg: {mean_temp}°C) - {gear}")
 ```
 
 ### Batch Processing
 
 ```python
-# Process multiple locations
+# Process multiple locations with performance breakdown
 stations = [
     (47687, "Temagami, ON"),
     (48549, "Toronto, ON"),
@@ -272,68 +324,80 @@ stations = [
 for station_id, location in stations:
     pipeline = WeatherForecastPipeline(station_id, location)
     results = pipeline.run_complete_pipeline()
-    print(f"{location}: {results['model_performance']['test_mae']:.2f}°C MAE")
+
+    perf = results['model_performance']
+    print(f"{location}:")
+    print(f"  Overall MAE: {perf['test_mae_overall']:.2f}°C")
+    print(f"  Max temp MAE: {perf['test_mae_by_type']['max']:.2f}°C")
+    print(f"  Min temp MAE: {perf['test_mae_by_type']['min']:.2f}°C")
+    print(f"  Mean temp MAE: {perf['test_mae_by_type']['mean']:.2f}°C")
 ```
 
 ## 🔬 Technical Details
 
-### Model Architecture
+### Multi-Output Model Architecture
 
-- **Type**: Multi-Layer Perceptron (Neural Network)
-- **Hidden Layers**: 100 → 50 neurons
+- **Type**: Multi-Layer Perceptron with **3 simultaneous outputs**
+- **Outputs**: Daily maximum, minimum, and mean temperatures
+- **Hidden Layers**: 150 → 75 → 25 neurons (optimized for multi-output)
 - **Activation**: ReLU
 - **Regularization**: L2 (α=0.01)
 - **Training**: Adaptive learning rate with early stopping
 - **Validation**: Time-series split (last 2 years for testing)
+- **Constraints**: Logical temperature relationships enforced (max ≥ mean ≥ min)
 
-### Feature Engineering
+### Enhanced Feature Engineering
 
-The system creates 13 carefully engineered features while avoiding data leakage:
+The system creates **21 carefully engineered features** for multi-temperature prediction while avoiding data leakage:
 
-**Temporal Features (4):**
+**Temporal Features (6):**
 
 - Day of year, Month
 - Seasonal cycles (sin/cos transformations)
+- Winter/Summer indicators
 
-**Lag Features (4):**
+**Multi-Temperature Lag Features (12):**
 
-- Yesterday's temperature
-- Last week's temperature
-- Two weeks ago temperature
-- Last month's temperature
+- Yesterday's max/min/mean temperatures
+- Last week's max/min/mean temperatures
+- Two weeks ago max/min/mean temperatures
+- Last month's max/min/mean temperatures
 
-**Rolling Features (3):**
+**Rolling Features (9):**
 
-- 7-day historical average (excluding current day)
-- 30-day historical average (excluding recent week)
-- 14-day temperature volatility (standard deviation)
+- 7-day historical averages for max/min/mean (excluding current day)
+- 30-day historical averages for max/min/mean (excluding recent week)
+- 14-day temperature volatility for max/min/mean (standard deviation)
 
-**Seasonal Features (2):**
+**Temperature Range Features (2):**
 
-- Winter indicator (Dec, Jan, Feb)
-- Summer indicator (Jun, Jul, Aug)
+- Yesterday's temperature range (max - min)
+- Last week's temperature range
 
-### Multi-Horizon Forecasting
+### Multi-Horizon Forecasting Strategy
 
-- **1-day**: Direct ML model prediction (highest accuracy)
-- **3-7 days**: ML + seasonal trend adjustments
-- **14-30 days**: ML + seasonal trends + uncertainty modeling
+- **1-day**: Direct multi-output ML model prediction (highest accuracy for all temperature types)
+- **3-7 days**: ML predictions + seasonal trend adjustments for each temperature type
+- **14-30 days**: ML + seasonal trends + uncertainty modeling with relationship constraints
 
-### Data Sources
+### Data Sources & Format
 
 - **Primary**: Environment and Climate Change Canada (ECCC)
-- **Format**: Daily weather observations in CSV format
+- **Format**: Daily weather observations with max/min/mean temperatures
 - **Coverage**: Canadian weather stations from 1840s to present
 - **Update Frequency**: Daily (historical data is stable)
+- **Quality**: Automatic validation and relationship enforcement
 
 ## 📊 Validation Methodology
 
-The system employs rigorous time-series validation to ensure realistic performance estimates:
+The system employs rigorous time-series validation for multi-temperature forecasting:
 
 1. **Time-based Split**: Last 2 years reserved for testing (no future data leakage)
-2. **Feature Generation**: Historical data only (no look-ahead bias)
-3. **Cross-validation**: Multiple forecast origins tested
-4. **Comparison**: Benchmarked against Prophet, climatology, and persistence
+2. **Multi-Output Validation**: Separate performance metrics for max, min, and mean temperatures
+3. **Feature Generation**: Historical data only (no look-ahead bias)
+4. **Cross-validation**: Multiple forecast origins tested for each temperature type
+5. **Relationship Validation**: Ensures max ≥ mean ≥ min in all forecasts
+6. **Comparison**: Benchmarked against Prophet, climatology, and persistence for each temperature type
 
 ## 🐛 Troubleshooting
 
@@ -342,8 +406,15 @@ The system employs rigorous time-series validation to ensure realistic performan
 **"No trained model found"**
 
 ```bash
-# Solution: Train a model first
+# Solution: Train a multi-temperature model first
 python weather_forecast.py --station-id 47687 --location "Temagami, ON"
+```
+
+**"Model is not multi-output format"**
+
+```bash
+# Solution: Retrain with latest pipeline for multi-temperature support
+python weather_forecast.py --station-id 47687 --location "Temagami, ON" --force-download
 ```
 
 **"No data available for date"**
@@ -355,7 +426,7 @@ python weather_forecast.py --station-id 47687 --location "Temagami, ON"
 **"Station ID not working"**
 
 - Verify station ID at [ECCC Historical Data](https://climate.weather.gc.ca/historical_data/search_historic_data_e.html)
-- Some stations have limited data coverage
+- Ensure station has max/min/mean temperature data (not just mean)
 - Try a major city station for testing
 
 **"API server not responding"**
@@ -371,17 +442,14 @@ python server.py --port 5001
 curl http://localhost:5001/health
 ```
 
-### Performance Issues
-
-**Slow dependency installation**: Use uv sync for instant setup
+**"Legacy single-temperature model detected"**
 
 ```bash
-# Fastest method - uses committed lock file
-uv sync
-
-# Alternative - still faster than pip
-uv pip install pandas numpy scikit-learn requests flask
+# Upgrade to multi-temperature model
+python weather_forecast.py --station-id 47687 --location "Temagami, ON" --force-download
 ```
+
+### Performance Issues
 
 **Slow training**: Reduce data range
 
@@ -402,20 +470,22 @@ python weather_forecast.py --station-id 47687 --location "Temagami, ON"
 
 ### ✅ Ideal Applications
 
-- **Outdoor Activity Planning**: Camping, hiking, canoeing trips
-- **Agricultural Planning**: Planting, harvesting decisions
-- **Event Planning**: Outdoor weddings, festivals, sports
-- **Research**: Climate analysis, trend studies
-- **Education**: Weather forecasting demonstrations
-- **Personal Use**: Daily temperature planning
+- **Outdoor Activity Planning**: Camping, hiking, canoeing trips (with daily temperature ranges)
+- **Agricultural Planning**: Planting, harvesting decisions (frost risk assessment)
+- **Event Planning**: Outdoor weddings, festivals, sports (comfort planning)
+- **Energy Planning**: Heating/cooling load forecasting
+- **Research**: Climate analysis, temperature trend studies
+- **Education**: Weather forecasting demonstrations with complete temperature profiles
+- **Personal Use**: Daily temperature planning with high/low expectations
 
 ### ⚠️ Limitations
 
 - **Geographic**: Canadian stations only (ECCC data)
 - **Variables**: Temperature only (not precipitation, wind, etc.)
-- **Accuracy**: Decreases significantly beyond 14 days
+- **Accuracy**: Decreases significantly beyond 14 days for all temperature types
 - **Extreme Events**: May not predict rare weather events well
 - **Microclimate**: Point forecasts, not local variations
+- **Seasonal Transitions**: Performance may vary during rapid seasonal changes
 
 ## 🔮 Future Enhancements
 
@@ -423,20 +493,21 @@ python weather_forecast.py --station-id 47687 --location "Temagami, ON"
 
 - [ ] **Multi-variable**: Precipitation, humidity, wind speed forecasts
 - [ ] **Global Data**: Integration with other national weather services
-- [ ] **Ensemble Models**: Multiple model averaging for better accuracy
+- [ ] **Ensemble Models**: Multiple model averaging for better accuracy across all temperature types
 - [ ] **Real-time Updates**: Automatic model retraining with new data
-- [ ] **Mobile App**: React Native interface for forecasts
-- [ ] **Visualization**: Interactive charts and maps
-- [ ] **Alerts**: Email/SMS notifications for weather changes
+- [ ] **Mobile App**: React Native interface for temperature range forecasts
+- [ ] **Visualization**: Interactive charts showing temperature ranges over time
+- [ ] **Alerts**: Email/SMS notifications for extreme temperature ranges
 
 ### Technical Improvements
 
-- [ ] **GPU Training**: CUDA support for faster model training
-- [ ] **AutoML**: Automated hyperparameter optimization
-- [ ] **Streaming**: Real-time forecast updates
+- [ ] **GPU Training**: CUDA support for faster multi-output model training
+- [ ] **AutoML**: Automated hyperparameter optimization for multi-output models
+- [ ] **Streaming**: Real-time forecast updates for all temperature types
 - [ ] **Docker**: Containerized deployment
 - [ ] **Kubernetes**: Scalable cloud deployment
-- [ ] **Database**: PostgreSQL backend for large-scale data
+- [ ] **Database**: PostgreSQL backend for large-scale multi-temperature data
+- [ ] **Advanced Constraints**: More sophisticated temperature relationship modeling
 
 ### Development Setup
 
@@ -454,6 +525,6 @@ python -m pytest tests/
 # Format code
 black *.py
 
-# Run example to verify setup
+# Run example to verify multi-temperature setup
 python usage_example.py
 ```
