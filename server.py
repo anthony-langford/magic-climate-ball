@@ -115,30 +115,66 @@ class WeatherForecastServer:
 
             # Load historical data sample for feature generation
             if "features_data_sample" in self.model_data:
-                self.historical_data = self.model_data["features_data_sample"][
-                    "temperature"
-                ]
+                features_sample = self.model_data["features_data_sample"]
+
+                # Check if this is multi-temperature format
+                if isinstance(features_sample, pd.DataFrame):
+                    # Check for multi-temperature columns
+                    multi_temp_cols = ["temp_max", "temp_min", "temp_mean"]
+                    if all(col in features_sample.columns for col in multi_temp_cols):
+                        # Multi-temperature format - store the full DataFrame
+                        self.historical_data = features_sample
+                        print("✅ Multi-temperature format detected")
+                    elif "temperature" in features_sample.columns:
+                        # Legacy single temperature format
+                        self.historical_data = features_sample["temperature"]
+                        print("⚠️  Legacy single-temperature format detected")
+                    else:
+                        print("⚠️  No temperature data found in features sample")
+                        self.historical_data = None
+                else:
+                    # Assume it's a Series (legacy format)
+                    self.historical_data = features_sample
+                    print("⚠️  Legacy series format detected")
 
             print(f"✅ Model loaded successfully!")
             print(f"📍 Location: {self.location_name}")
             print(f"🏠 Station ID: {self.station_id}")
 
-            # Handle different MAE key names for compatibility
-            mae_value = self.model_performance.get(
-                "test_mae"
-            ) or self.model_performance.get("expected_mae", "Unknown")
-            print(
-                f"🎯 Expected MAE: {mae_value:.3f}°C"
-                if isinstance(mae_value, (int, float))
-                else f"🎯 Expected MAE: {mae_value}"
-            )
+            # Display performance metrics
+            self._display_model_performance()
             print(f"🧠 Model type: {self.model_performance['model_type']}")
 
         except Exception as e:
             raise ValueError(f"Error loading model: {e}")
 
-    def _load_weather_cache_data(self) -> pd.Series:
-        """Load weather data from cache files for more complete historical context"""
+    def _display_model_performance(self):
+        """Display model performance metrics with proper formatting"""
+
+        # Handle both multi-output and single-output models
+        if "test_mae_overall" in self.model_performance:
+            # Multi-output model
+            print(
+                f"🎯 Expected MAE (Overall): {self.model_performance['test_mae_overall']:.3f}°C"
+            )
+            if "test_mae_by_type" in self.model_performance:
+                print("   Performance by temperature type:")
+                for temp_type, mae in self.model_performance[
+                    "test_mae_by_type"
+                ].items():
+                    print(f"     {temp_type.capitalize()}: {mae:.3f}°C")
+        else:
+            # Legacy single-output model
+            mae_value = self.model_performance.get(
+                "test_mae"
+            ) or self.model_performance.get("expected_mae", "Unknown")
+            if isinstance(mae_value, (int, float)):
+                print(f"🎯 Expected MAE: {mae_value:.3f}°C")
+            else:
+                print(f"🎯 Expected MAE: {mae_value}")
+
+    def _load_weather_cache_data(self) -> pd.DataFrame:
+        """Load weather data from cache files for feature generation"""
 
         # Try to find cached weather data file
         cache_files = list(
@@ -146,30 +182,52 @@ class WeatherForecastServer:
         )
 
         if cache_files:
-            cache_file = cache_files[0]  # Use first available
-            print(f"📊 Loading additional weather data from {cache_file}")
+            # Sort by modification time, use the most recent
+            cache_files.sort(key=lambda x: x.stat().st_mtime, reverse=True)
+            cache_file = cache_files[0]
+
+            print(f"📊 Loading weather data from {cache_file}")
 
             try:
                 df = pd.read_csv(cache_file, index_col=0, parse_dates=True)
-                return df["temperature"].dropna().sort_index()
+
+                # Check if it has the required multi-temperature format
+                required_temp_cols = ["temp_max", "temp_min", "temp_mean"]
+                has_multi_temp = all(col in df.columns for col in required_temp_cols)
+
+                if has_multi_temp:
+                    return df
+                else:
+                    print(f"❌ Cache file is in old single-temperature format")
+                    print(
+                        f'🔄 Please retrain model with: python weather_forecast.py --station-id {self.station_id} --location "{self.location_name}" --force-download'
+                    )
+                    raise ValueError(
+                        "Cache file is in old format - please retrain model"
+                    )
+
             except Exception as e:
                 print(f"⚠️  Could not load cache file: {e}")
+                raise ValueError(f"Could not load weather data: {e}")
 
-        # Fallback to model's historical data sample
-        return self.historical_data
+        # No cache available
+        print("❌ No weather data cache found")
+        print(
+            f'🔄 Please run: python weather_forecast.py --station-id {self.station_id} --location "{self.location_name}"'
+        )
+        raise ValueError(
+            "No weather data available - please run the training pipeline first"
+        )
 
     def generate_features_for_date(self, target_date: datetime) -> Dict[str, float]:
-        """Generate ML features for a specific date"""
+        """Generate ML features for a specific date (multi-temperature format only)"""
 
-        # Use cached weather data if available, otherwise use model sample
-        if self.historical_data is None or len(self.historical_data) < 100:
-            temp_data = self._load_weather_cache_data()
-        else:
-            temp_data = self.historical_data
+        # Load weather data
+        weather_data = self._load_weather_cache_data()
 
-        if target_date not in temp_data.index:
+        if target_date not in weather_data.index:
             # Find closest available date
-            closest_date = temp_data.index[temp_data.index <= target_date].max()
+            closest_date = weather_data.index[weather_data.index <= target_date].max()
             if pd.isna(closest_date):
                 raise ValueError(
                     f"No historical data available for {target_date.date()}"
@@ -178,9 +236,8 @@ class WeatherForecastServer:
             print(f"⚠️  Using closest available date: {closest_date.date()}")
             target_date = closest_date
 
-        # Get position in historical data
-        date_pos = temp_data.index.get_loc(target_date)
-
+        # Get position in weather data
+        date_pos = weather_data.index.get_loc(target_date)
         features = {}
 
         # Temporal features
@@ -190,68 +247,154 @@ class WeatherForecastServer:
         features["sin_doy"] = np.sin(2 * np.pi * day_of_year / 365.25)
         features["cos_doy"] = np.cos(2 * np.pi * day_of_year / 365.25)
 
-        # Lag features
+        # Multi-temperature lag features
+        temp_types = ["max", "min", "mean"]
+        lag_days = [1, 7, 14, 30]
+
+        for temp_type in temp_types:
+            temp_col = f"temp_{temp_type}"
+            temp_series = weather_data[temp_col]
+
+            for lag in lag_days:
+                try:
+                    if date_pos >= lag:
+                        features[f"{temp_type}_lag_{lag}"] = temp_series.iloc[
+                            date_pos - lag
+                        ]
+                    else:
+                        features[f"{temp_type}_lag_{lag}"] = temp_series.iloc[
+                            max(0, date_pos - 1)
+                        ]
+                except:
+                    features[f"{temp_type}_lag_{lag}"] = temp_series.mean()
+
+        # Rolling averages for all temperature types
+        for temp_type in temp_types:
+            temp_col = f"temp_{temp_type}"
+            temp_series = weather_data[temp_col]
+
+            try:
+                # 7-day rolling average
+                if date_pos >= 8:
+                    historical_temps = temp_series.iloc[date_pos - 8 : date_pos - 1]
+                    features[f"{temp_type}_roll_7d"] = historical_temps.mean()
+                else:
+                    features[f"{temp_type}_roll_7d"] = temp_series.iloc[
+                        : max(1, date_pos)
+                    ].mean()
+
+                # 30-day rolling average
+                if date_pos >= 37:
+                    historical_temps = temp_series.iloc[date_pos - 37 : date_pos - 7]
+                    features[f"{temp_type}_roll_30d"] = historical_temps.mean()
+                else:
+                    features[f"{temp_type}_roll_30d"] = temp_series.iloc[
+                        : max(1, date_pos)
+                    ].mean()
+
+                # Standard deviation
+                if date_pos >= 15:
+                    historical_temps = temp_series.iloc[date_pos - 15 : date_pos - 1]
+                    features[f"{temp_type}_std_14d"] = historical_temps.std()
+                else:
+                    features[f"{temp_type}_std_14d"] = temp_series.iloc[
+                        : max(1, date_pos)
+                    ].std()
+
+            except:
+                # Fallback values
+                mean_temp = temp_series.mean()
+                features[f"{temp_type}_roll_7d"] = mean_temp
+                features[f"{temp_type}_roll_30d"] = mean_temp
+                features[f"{temp_type}_std_14d"] = 5.0
+
+        # Temperature range features
         try:
             if date_pos >= 1:
-                features["temp_lag_1"] = temp_data.iloc[date_pos - 1]
+                yesterday_range = (
+                    weather_data["temp_max"].iloc[date_pos - 1]
+                    - weather_data["temp_min"].iloc[date_pos - 1]
+                )
+                features["temp_range_lag_1"] = yesterday_range
             else:
-                features["temp_lag_1"] = temp_data.iloc[date_pos]
+                features["temp_range_lag_1"] = (
+                    weather_data["temp_max"] - weather_data["temp_min"]
+                ).mean()
 
             if date_pos >= 7:
-                features["temp_lag_7"] = temp_data.iloc[date_pos - 7]
+                week_ago_range = (
+                    weather_data["temp_max"].iloc[date_pos - 7]
+                    - weather_data["temp_min"].iloc[date_pos - 7]
+                )
+                features["temp_range_lag_7"] = week_ago_range
             else:
-                features["temp_lag_7"] = temp_data.iloc[max(0, date_pos - 1)]
-
-            if date_pos >= 14:
-                features["temp_lag_14"] = temp_data.iloc[date_pos - 14]
-            else:
-                features["temp_lag_14"] = temp_data.iloc[max(0, date_pos - 1)]
-
-            if date_pos >= 30:
-                features["temp_lag_30"] = temp_data.iloc[date_pos - 30]
-            else:
-                features["temp_lag_30"] = temp_data.iloc[max(0, date_pos - 1)]
+                features["temp_range_lag_7"] = (
+                    weather_data["temp_max"] - weather_data["temp_min"]
+                ).mean()
         except:
-            # Fallback values
-            mean_temp = temp_data.mean()
-            features["temp_lag_1"] = mean_temp
-            features["temp_lag_7"] = mean_temp
-            features["temp_lag_14"] = mean_temp
-            features["temp_lag_30"] = mean_temp
-
-        # Rolling averages
-        try:
-            if date_pos >= 8:
-                historical_temps = temp_data.iloc[date_pos - 8 : date_pos - 1]
-                features["rolling_7d_mean"] = historical_temps.mean()
-            else:
-                features["rolling_7d_mean"] = temp_data.iloc[: max(1, date_pos)].mean()
-
-            if date_pos >= 37:
-                historical_temps = temp_data.iloc[date_pos - 37 : date_pos - 7]
-                features["rolling_30d_mean"] = historical_temps.mean()
-            else:
-                features["rolling_30d_mean"] = temp_data.iloc[: max(1, date_pos)].mean()
-        except:
-            mean_temp = temp_data.mean()
-            features["rolling_7d_mean"] = mean_temp
-            features["rolling_30d_mean"] = mean_temp
-
-        # Rolling standard deviation
-        try:
-            if date_pos >= 15:
-                historical_temps = temp_data.iloc[date_pos - 15 : date_pos - 1]
-                features["rolling_std_14d"] = historical_temps.std()
-            else:
-                features["rolling_std_14d"] = temp_data.iloc[: max(1, date_pos)].std()
-        except:
-            features["rolling_std_14d"] = 5.0  # Reasonable default
+            features["temp_range_lag_1"] = 10.0
+            features["temp_range_lag_7"] = 10.0
 
         # Seasonal features
         features["is_winter"] = 1 if target_date.month in [12, 1, 2] else 0
         features["is_summer"] = 1 if target_date.month in [6, 7, 8] else 0
 
         return features
+
+    def _apply_seasonal_adjustments(
+        self,
+        base_temps: Dict[str, float],
+        forecast_date: datetime,
+        target_date: datetime,
+        weather_data: pd.DataFrame,
+        horizon: int,
+    ) -> Dict[str, float]:
+        """Apply seasonal adjustments for multi-day forecasts"""
+
+        adjusted_temps = {}
+        target_doy = target_date.timetuple().tm_yday
+        current_doy = forecast_date.timetuple().tm_yday
+
+        for temp_type, base_temp in base_temps.items():
+            temp_col = f"temp_{temp_type}"
+
+            if temp_col in weather_data.columns:
+                # Get historical temperatures for seasonal adjustment
+                historical_temps_target = weather_data[temp_col][
+                    weather_data[temp_col].index.dayofyear == target_doy
+                ]
+                historical_temps_current = weather_data[temp_col][
+                    weather_data[temp_col].index.dayofyear == current_doy
+                ]
+
+                if (
+                    len(historical_temps_target) > 0
+                    and len(historical_temps_current) > 0
+                ):
+                    # Calculate seasonal difference
+                    avg_temp_target = historical_temps_target.mean()
+                    avg_temp_current = historical_temps_current.mean()
+                    seasonal_diff = avg_temp_target - avg_temp_current
+
+                    # Apply seasonal adjustment with decay for longer horizons
+                    seasonal_weight = 0.5 * np.exp(
+                        -horizon / 14.0
+                    )  # Decay over 2 weeks
+                    seasonal_adjustment = seasonal_diff * seasonal_weight
+
+                    adjusted_temps[temp_type] = base_temp + seasonal_adjustment
+                else:
+                    # Fallback: slight random variation
+                    adjusted_temps[temp_type] = base_temp + np.random.normal(0, 0.5)
+            else:
+                adjusted_temps[temp_type] = base_temp + np.random.normal(0, 0.5)
+
+            # Add some uncertainty for longer horizons
+            if horizon > 7:
+                uncertainty = np.random.normal(0, 0.3 * (horizon / 7.0))
+                adjusted_temps[temp_type] += uncertainty
+
+        return adjusted_temps
 
     def predict_temperature(
         self,
@@ -283,11 +426,14 @@ class WeatherForecastServer:
         # Scale features
         feature_vector_scaled = self.scaler.transform(feature_vector)
 
-        # Generate base prediction
-        base_prediction = self.model.predict(feature_vector_scaled)[0]
+        # Generate prediction
+        prediction = self.model.predict(feature_vector_scaled)[0]
+
+        # Check if this is a multi-output model
+        is_multi_output = isinstance(prediction, np.ndarray) and len(prediction) == 3
 
         # Load temperature data for seasonal adjustments
-        temp_data = self._load_weather_cache_data()
+        weather_data = self._load_weather_cache_data()
 
         # Generate forecasts for different horizons
         forecasts = {}
@@ -295,61 +441,73 @@ class WeatherForecastServer:
         for horizon in horizons:
             target_date = forecast_date + timedelta(days=horizon)
 
-            if horizon == 1:
-                # 1-day forecast: Use model prediction directly
-                prediction = base_prediction
-                confidence = "high"
-
-            else:
-                # Multi-day forecasts: Apply seasonal adjustments
-                target_doy = target_date.timetuple().tm_yday
-                current_doy = forecast_date.timetuple().tm_yday
-
-                # Get historical temperatures for seasonal adjustment
-                try:
-                    historical_temps_target = temp_data[
-                        temp_data.index.dayofyear == target_doy
-                    ]
-                    historical_temps_current = temp_data[
-                        temp_data.index.dayofyear == current_doy
-                    ]
-
-                    if (
-                        len(historical_temps_target) > 3
-                        and len(historical_temps_current) > 3
-                    ):
-                        avg_temp_target = historical_temps_target.mean()
-                        avg_temp_current = historical_temps_current.mean()
-                        seasonal_diff = avg_temp_target - avg_temp_current
-
-                        # Apply seasonal adjustment with decay
-                        seasonal_weight = 0.4 * np.exp(-horizon / 10.0)
-                        seasonal_adjustment = seasonal_diff * seasonal_weight
-
-                        prediction = base_prediction + seasonal_adjustment
-                    else:
-                        # Fallback: add small random variation
-                        prediction = base_prediction + np.random.normal(0, 0.3)
-
-                except:
-                    prediction = base_prediction + np.random.normal(0, 0.5)
-
-                # Add uncertainty for longer horizons
-                if horizon > 7:
-                    uncertainty = np.random.normal(0, 0.2 * (horizon / 7.0))
-                    prediction += uncertainty
-                    confidence = "low"
-                elif horizon > 3:
-                    confidence = "medium"
-                else:
+            if is_multi_output:
+                # Multi-output model: [max, min, mean]
+                if horizon == 1:
+                    # 1-day forecast: Use model prediction directly
+                    temp_max, temp_min, temp_mean = (
+                        prediction[0],
+                        prediction[1],
+                        prediction[2],
+                    )
                     confidence = "high"
+                else:
+                    # Multi-day forecasts: Apply seasonal adjustments
+                    base_temps = {
+                        "max": prediction[0],
+                        "min": prediction[1],
+                        "mean": prediction[2],
+                    }
 
-            forecasts[f"{horizon}_day"] = {
-                "date": target_date.strftime("%Y-%m-%d"),
-                "temperature": round(float(prediction), 1),
-                "horizon_days": horizon,
-                "confidence": confidence,
-            }
+                    adjusted_temps = self._apply_seasonal_adjustments(
+                        base_temps, forecast_date, target_date, weather_data, horizon
+                    )
+
+                    temp_max = adjusted_temps["max"]
+                    temp_min = adjusted_temps["min"]
+                    temp_mean = adjusted_temps["mean"]
+
+                    # Ensure logical relationships
+                    if temp_max < temp_mean:
+                        temp_max = temp_mean + abs(temp_max - temp_mean)
+                    if temp_min > temp_mean:
+                        temp_min = temp_mean - abs(temp_min - temp_mean)
+                    if temp_max < temp_min:
+                        temp_max, temp_min = temp_min, temp_max
+
+                    confidence = (
+                        "low" if horizon > 7 else "medium" if horizon > 3 else "high"
+                    )
+
+                forecasts[f"{horizon}_day"] = {
+                    "date": target_date.strftime("%Y-%m-%d"),
+                    "temperature_max": round(float(temp_max), 1),
+                    "temperature_min": round(float(temp_min), 1),
+                    "temperature_mean": round(float(temp_mean), 1),
+                    "temperature_range": round(float(temp_max - temp_min), 1),
+                    "horizon_days": horizon,
+                    "confidence": confidence,
+                }
+            else:
+                # Legacy single-output model
+                if horizon == 1:
+                    temperature = float(prediction)
+                    confidence = "high"
+                else:
+                    # Apply some seasonal adjustment for legacy models
+                    temperature = float(prediction) + np.random.normal(
+                        0, 0.5 * (horizon / 7.0)
+                    )
+                    confidence = (
+                        "low" if horizon > 7 else "medium" if horizon > 3 else "high"
+                    )
+
+                forecasts[f"{horizon}_day"] = {
+                    "date": target_date.strftime("%Y-%m-%d"),
+                    "temperature": round(temperature, 1),
+                    "horizon_days": horizon,
+                    "confidence": confidence,
+                }
 
         # Create response
         response = {
@@ -358,21 +516,51 @@ class WeatherForecastServer:
             "forecast_from": forecast_date.strftime("%Y-%m-%d"),
             "generated_at": datetime.now().isoformat(),
             "forecasts": forecasts,
-            "features_used": features,
             "model_info": {
                 "type": self.model_performance["model_type"],
-                "expected_mae": f"{self.model_performance.get('test_mae', self.model_performance.get('expected_mae', 'Unknown')):.3f}°C",
-                "architecture": self.model_performance["architecture"],
+                "expected_mae": self._format_mae_display(),
+                "format": "multi-output" if is_multi_output else "single-output",
             },
-            "notes": [
-                "Forecasts are for daily mean temperature",
-                "1-day forecasts use ML model directly",
-                "Multi-day forecasts include seasonal adjustments",
-                "Confidence decreases with longer horizons",
-            ],
+            "notes": self._get_forecast_notes(is_multi_output),
         }
 
         return response
+
+    def _format_mae_display(self) -> str:
+        """Format MAE display for API responses"""
+
+        if "test_mae_overall" in self.model_performance:
+            # Multi-output model
+            return f"{self.model_performance['test_mae_overall']:.3f}°C (overall)"
+        else:
+            # Legacy single-output model
+            mae_value = self.model_performance.get(
+                "test_mae"
+            ) or self.model_performance.get("expected_mae", "Unknown")
+            if isinstance(mae_value, (int, float)):
+                return f"{mae_value:.3f}°C"
+            else:
+                return str(mae_value)
+
+    def _get_forecast_notes(self, is_multi_output: bool) -> List[str]:
+        """Get appropriate forecast notes based on model type"""
+
+        if is_multi_output:
+            return [
+                "Multi-temperature forecasts: daily maximum, minimum, and mean temperatures",
+                "1-day forecasts use multi-output ML model directly (highest accuracy)",
+                "Multi-day forecasts include seasonal adjustments for all temperature types",
+                "Temperature relationships maintained: max ≥ mean ≥ min",
+                "Confidence decreases with longer forecast horizons",
+            ]
+        else:
+            return [
+                "Single temperature forecasts (legacy model)",
+                "1-day forecasts use ML model directly (highest accuracy)",
+                "Multi-day forecasts include seasonal trend adjustments",
+                "Confidence decreases with longer forecast horizons",
+                "Consider retraining with --force-download for multi-temperature support",
+            ]
 
     def batch_forecast(
         self, start_date: str, end_date: str, horizons: List[int] = [1, 7, 14, 30]
@@ -405,34 +593,36 @@ class WeatherForecastServer:
             return {"error": "No model loaded"}
 
         # Get data range info
-        temp_data = self._load_weather_cache_data()
+        try:
+            temp_data = self._load_weather_cache_data()
+            total_records = len(temp_data)
+            start_date = temp_data.index.min().strftime("%Y-%m-%d")
+            end_date = temp_data.index.max().strftime("%Y-%m-%d")
+        except:
+            total_records = 0
+            start_date = "Unknown"
+            end_date = "Unknown"
 
         return {
             "model_info": {
                 "type": self.model_performance["model_type"],
-                "architecture": self.model_performance["architecture"],
-                "expected_mae": f"{self.model_performance.get('test_mae', self.model_performance.get('expected_mae', 'Unknown')):.3f}°C",
-                "training_samples": self.model_performance["train_samples"],
-                "test_samples": self.model_performance["test_samples"],
+                "architecture": self.model_performance.get("architecture", "Unknown"),
+                "expected_mae": self._format_mae_display(),
+                "training_samples": self.model_performance.get("train_samples", 0),
+                "test_samples": self.model_performance.get("test_samples", 0),
+                "format": (
+                    "multi-output"
+                    if "test_mae_overall" in self.model_performance
+                    else "single-output"
+                ),
             },
             "location_info": {
                 "name": self.location_name,
                 "station_id": self.station_id,
             },
             "data_info": {
-                "total_records": len(temp_data) if temp_data is not None else 0,
-                "date_range": {
-                    "start": (
-                        temp_data.index.min().strftime("%Y-%m-%d")
-                        if temp_data is not None
-                        else "Unknown"
-                    ),
-                    "end": (
-                        temp_data.index.max().strftime("%Y-%m-%d")
-                        if temp_data is not None
-                        else "Unknown"
-                    ),
-                },
+                "total_records": total_records,
+                "date_range": {"start": start_date, "end": end_date},
             },
             "features": {"count": len(self.feature_names), "names": self.feature_names},
             "server_info": {
@@ -467,6 +657,7 @@ def create_flask_app(server: WeatherForecastServer) -> Flask:
         <p><strong>Location:</strong> {{ location_name }}</p>
         <p><strong>Station ID:</strong> {{ station_id }}</p>
         <p><strong>Expected Accuracy:</strong> {{ expected_mae }}</p>
+        <p><strong>Model Format:</strong> {{ model_format }}</p>
         
         <h2>Available Endpoints:</h2>
         
@@ -501,14 +692,12 @@ def create_flask_app(server: WeatherForecastServer) -> Flask:
     @app.route("/")
     def index():
         """Root page with API documentation"""
-        # Get MAE value with compatibility
-        mae_value = server.model_performance.get(
-            "test_mae"
-        ) or server.model_performance.get("expected_mae", "Unknown")
-        mae_display = (
-            f"{mae_value:.3f}°C"
-            if isinstance(mae_value, (int, float))
-            else str(mae_value)
+
+        mae_display = server._format_mae_display()
+        model_format = (
+            "Multi-output"
+            if "test_mae_overall" in server.model_performance
+            else "Single-output (Legacy)"
         )
 
         return render_template_string(
@@ -516,6 +705,7 @@ def create_flask_app(server: WeatherForecastServer) -> Flask:
             location_name=server.location_name,
             station_id=server.station_id,
             expected_mae=mae_display,
+            model_format=model_format,
             today=datetime.now().strftime("%Y-%m-%d"),
         )
 
@@ -602,6 +792,11 @@ def create_flask_app(server: WeatherForecastServer) -> Flask:
                 "status": "healthy",
                 "model_loaded": server.model is not None,
                 "location": server.location_name,
+                "model_format": (
+                    "multi-output"
+                    if "test_mae_overall" in server.model_performance
+                    else "single-output"
+                ),
                 "timestamp": datetime.now().isoformat(),
             }
         )
@@ -654,32 +849,36 @@ Examples:
         test_date = datetime.now().strftime("%Y-%m-%d")
         test_result = server.predict_temperature(test_date, [1, 7])
         print(f"✅ Test successful!")
-        print(
-            f"   1-day forecast: {test_result['forecasts']['1_day']['temperature']}°C"
-        )
-        print(
-            f"   7-day forecast: {test_result['forecasts']['7_day']['temperature']}°C"
-        )
+
+        # Display results based on model format
+        for horizon_key, forecast in test_result["forecasts"].items():
+            if "temperature_max" in forecast:
+                # Multi-temperature format
+                max_temp = forecast["temperature_max"]
+                min_temp = forecast["temperature_min"]
+                mean_temp = forecast["temperature_mean"]
+                temp_range = forecast["temperature_range"]
+                print(
+                    f"   {forecast['horizon_days']}-day forecast: {max_temp}°C/{min_temp}°C (avg: {mean_temp}°C, range: {temp_range}°C)"
+                )
+            else:
+                # Legacy single temperature format
+                temp = forecast["temperature"]
+                print(f"   {forecast['horizon_days']}-day forecast: {temp}°C")
+
     except Exception as e:
         print(f"⚠️  Test forecast failed: {e}")
+        return 1
 
     # Start Flask server
     if FLASK_AVAILABLE:
         print(f"\n🚀 Starting weather forecast API server...")
         print(f"📍 Location: {server.location_name}")
         print(f"🏠 Station: {server.station_id}")
-
-        # Handle MAE display with compatibility
-        mae_value = server.model_performance.get(
-            "test_mae"
-        ) or server.model_performance.get("expected_mae", "Unknown")
-        mae_display = (
-            f"{mae_value:.3f}°C"
-            if isinstance(mae_value, (int, float))
-            else str(mae_value)
+        print(f"🎯 Expected accuracy: {server._format_mae_display()}")
+        print(
+            f"🔧 Model format: {'Multi-output' if 'test_mae_overall' in server.model_performance else 'Single-output (Legacy)'}"
         )
-        print(f"🎯 Expected accuracy: {mae_display}")
-
         print(f"🌐 Server: http://{args.host}:{args.port}")
         print(f"📋 API endpoints:")
         print(f"   GET  /forecast?date=YYYY-MM-DD&horizons=1,7,14,30")

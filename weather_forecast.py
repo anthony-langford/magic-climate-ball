@@ -84,26 +84,58 @@ class WeatherForecastPipeline:
             f"weather_data_station_{self.station_id}_{start_year}_{end_year}.csv"
         )
 
+        # If force_download, clean up old cache files first
+        if force_download:
+            old_cache_files = list(
+                Path(".").glob(f"weather_data_station_{self.station_id}_*.csv")
+            )
+            if old_cache_files:
+                print(f"🗑️  Cleaning up {len(old_cache_files)} old cache file(s)...")
+                for old_file in old_cache_files:
+                    try:
+                        old_file.unlink()
+                        print(f"   Deleted: {old_file.name}")
+                    except Exception as e:
+                        print(f"   Could not delete {old_file.name}: {e}")
+
         if not force_download and Path(cache_filename).exists():
             print(f"📂 Loading existing weather data from {cache_filename}...")
             try:
-                self.raw_data = pd.read_csv(
-                    cache_filename, index_col=0, parse_dates=True
+                cached_data = pd.read_csv(cache_filename, index_col=0, parse_dates=True)
+
+                # Check if cached data has the multi-temperature format we need
+                required_temp_cols = ["temp_max", "temp_min", "temp_mean"]
+                has_multi_temp = all(
+                    col in cached_data.columns for col in required_temp_cols
                 )
 
-                # Ensure temperature column exists
-                if "temperature" not in self.raw_data.columns:
-                    raise ValueError("Temperature column not found in cached data")
-
-                print(f"✅ Loaded {len(self.raw_data)} temperature records from cache")
-                print(
-                    f"📅 Date range: {self.raw_data.index.min().date()} to {self.raw_data.index.max().date()}"
-                )
-                print(
-                    f"🌡️  Temperature range: {self.raw_data['temperature'].min():.1f}°C to {self.raw_data['temperature'].max():.1f}°C"
-                )
-
-                return self.raw_data
+                if has_multi_temp:
+                    # New format - has all temperature types
+                    self.raw_data = cached_data
+                    print(
+                        f"✅ Loaded {len(self.raw_data)} temperature records from cache (multi-temperature format)"
+                    )
+                    print(
+                        f"📅 Date range: {self.raw_data.index.min().date()} to {self.raw_data.index.max().date()}"
+                    )
+                    print(f"🌡️  Temperature ranges:")
+                    print(
+                        f"   Max: {self.raw_data['temp_max'].min():.1f}°C to {self.raw_data['temp_max'].max():.1f}°C"
+                    )
+                    print(
+                        f"   Min: {self.raw_data['temp_min'].min():.1f}°C to {self.raw_data['temp_min'].max():.1f}°C"
+                    )
+                    print(
+                        f"   Mean: {self.raw_data['temp_mean'].min():.1f}°C to {self.raw_data['temp_mean'].max():.1f}°C"
+                    )
+                    return self.raw_data
+                else:
+                    # Old format - need to re-download to get all temperature types
+                    print(f"⚠️  Cached data is in old format (only mean temperature)")
+                    print(
+                        f"📥 Re-downloading to get max, min, and mean temperatures..."
+                    )
+                    # Continue to download fresh data
 
             except Exception as e:
                 print(f"⚠️  Error loading cached data: {e}")
@@ -178,30 +210,42 @@ class WeatherForecastPipeline:
         self.raw_data["Date/Time"] = pd.to_datetime(self.raw_data["Date/Time"])
         self.raw_data = self.raw_data.set_index("Date/Time").sort_index()
 
-        # Focus on temperature data
-        temp_col = "Mean Temp (°C)"
-        if temp_col not in self.raw_data.columns:
-            # Try alternative column names
-            temp_cols = [
-                col
-                for col in self.raw_data.columns
-                if "temp" in col.lower() and "mean" in col.lower()
-            ]
-            if temp_cols:
-                temp_col = temp_cols[0]
-            else:
-                raise ValueError("Could not find temperature column in downloaded data")
+        # Focus on temperature data - load all three types
+        temp_cols = {
+            "max": "Max Temp (°C)",
+            "min": "Min Temp (°C)",
+            "mean": "Mean Temp (°C)",
+        }
 
-        # Clean temperature data
-        self.raw_data["temperature"] = pd.to_numeric(
-            self.raw_data[temp_col], errors="coerce"
-        )
-        self.raw_data = self.raw_data.dropna(subset=["temperature"])
+        for temp_type, col_name in temp_cols.items():
+            if col_name not in self.raw_data.columns:
+                # Try alternative column names
+                alt_cols = [
+                    col
+                    for col in self.raw_data.columns
+                    if "temp" in col.lower() and temp_type in col.lower()
+                ]
+                if alt_cols:
+                    col_name = alt_cols[0]
+                else:
+                    raise ValueError(
+                        f"Could not find {temp_type} temperature column in downloaded data"
+                    )
 
-        # Save to cache for future use
+            # Clean temperature data
+            self.raw_data[f"temp_{temp_type}"] = pd.to_numeric(
+                self.raw_data[col_name], errors="coerce"
+            )
+
+        # Remove rows where any temperature is missing
+        temp_columns = ["temp_max", "temp_min", "temp_mean"]
+        self.raw_data = self.raw_data.dropna(subset=temp_columns)
+
+        # Save to cache for future use (with all temperature types)
         try:
+            # Save complete data including all temperature columns
             self.raw_data.to_csv(cache_filename)
-            print(f"💾 Cached data saved to {cache_filename}")
+            print(f"💾 Multi-temperature data cached to {cache_filename}")
         except Exception as e:
             print(f"⚠️  Could not save cache file: {e}")
 
@@ -209,19 +253,26 @@ class WeatherForecastPipeline:
         print(
             f"📅 Date range: {self.raw_data.index.min().date()} to {self.raw_data.index.max().date()}"
         )
+        print(f"🌡️  Temperature ranges:")
         print(
-            f"🌡️  Temperature range: {self.raw_data['temperature'].min():.1f}°C to {self.raw_data['temperature'].max():.1f}°C"
+            f"   Max: {self.raw_data['temp_max'].min():.1f}°C to {self.raw_data['temp_max'].max():.1f}°C"
+        )
+        print(
+            f"   Min: {self.raw_data['temp_min'].min():.1f}°C to {self.raw_data['temp_min'].max():.1f}°C"
+        )
+        print(
+            f"   Mean: {self.raw_data['temp_mean'].min():.1f}°C to {self.raw_data['temp_mean'].max():.1f}°C"
         )
 
         return self.raw_data
 
     def create_ml_features(self) -> pd.DataFrame:
         """
-        Create clean ML features from raw weather data
+        Create clean ML features from raw weather data for multi-temperature prediction
         Carefully avoids data leakage by using only historical information
 
         Returns:
-            DataFrame with ML-ready features
+            DataFrame with ML-ready features for max, min, and mean temperature prediction
         """
 
         if self.raw_data is None:
@@ -229,14 +280,20 @@ class WeatherForecastPipeline:
                 "No raw data available. Run download_historical_data() first."
             )
 
-        print("🔧 Creating ML features...")
+        print("🔧 Creating ML features for multi-temperature prediction...")
 
-        # Start with temperature data
-        temp_series = self.raw_data["temperature"].copy()
+        # Temperature data for all three types
+        temp_types = ["max", "min", "mean"]
+        temp_data = {}
+        for temp_type in temp_types:
+            temp_data[temp_type] = self.raw_data[f"temp_{temp_type}"].copy()
 
         # Create feature dataframe
-        features_df = pd.DataFrame(index=temp_series.index)
-        features_df["temperature"] = temp_series
+        features_df = pd.DataFrame(index=self.raw_data.index)
+
+        # Add target variables
+        for temp_type in temp_types:
+            features_df[f"temp_{temp_type}"] = temp_data[temp_type]
 
         # 1. Temporal features (always safe)
         features_df["day_of_year"] = features_df.index.dayofyear
@@ -244,50 +301,66 @@ class WeatherForecastPipeline:
         features_df["sin_doy"] = np.sin(2 * np.pi * features_df["day_of_year"] / 365.25)
         features_df["cos_doy"] = np.cos(2 * np.pi * features_df["day_of_year"] / 365.25)
 
-        # 2. Lag features (historical temperatures)
-        print("  Adding lag features...")
-        features_df["temp_lag_1"] = temp_series.shift(1)  # Yesterday
-        features_df["temp_lag_7"] = temp_series.shift(7)  # Last week
-        features_df["temp_lag_14"] = temp_series.shift(14)  # Two weeks ago
-        features_df["temp_lag_30"] = temp_series.shift(30)  # Last month
+        # 2. Lag features for all temperature types
+        print("  Adding lag features for max, min, and mean temperatures...")
+        lag_days = [1, 7, 14, 30]
+
+        for temp_type in temp_types:
+            for lag in lag_days:
+                features_df[f"{temp_type}_lag_{lag}"] = temp_data[temp_type].shift(lag)
 
         # 3. Rolling averages (carefully calculated to avoid leakage)
-        print("  Adding rolling averages...")
+        print("  Adding rolling averages for all temperature types...")
 
         # 7-day rolling average (excluding current day and yesterday)
-        rolling_7d = []
-        for i in range(len(temp_series)):
-            if i >= 8:  # Need at least 8 previous days
-                historical_temps = temp_series.iloc[i - 8 : i - 1]  # Days 2-8 ago
-                rolling_7d.append(historical_temps.mean())
-            else:
-                rolling_7d.append(np.nan)
+        for temp_type in temp_types:
+            rolling_7d = []
+            temp_series = temp_data[temp_type]
 
-        features_df["rolling_7d_mean"] = rolling_7d
+            for i in range(len(temp_series)):
+                if i >= 8:  # Need at least 8 previous days
+                    historical_temps = temp_series.iloc[i - 8 : i - 1]  # Days 2-8 ago
+                    rolling_7d.append(historical_temps.mean())
+                else:
+                    rolling_7d.append(np.nan)
+
+            features_df[f"{temp_type}_roll_7d"] = rolling_7d
 
         # 30-day rolling average (excluding current day and last week)
-        rolling_30d = []
-        for i in range(len(temp_series)):
-            if i >= 37:  # Need at least 37 previous days
-                historical_temps = temp_series.iloc[i - 37 : i - 7]  # Days 8-37 ago
-                rolling_30d.append(historical_temps.mean())
-            else:
-                rolling_30d.append(np.nan)
+        for temp_type in temp_types:
+            rolling_30d = []
+            temp_series = temp_data[temp_type]
 
-        features_df["rolling_30d_mean"] = rolling_30d
+            for i in range(len(temp_series)):
+                if i >= 37:  # Need at least 37 previous days
+                    historical_temps = temp_series.iloc[i - 37 : i - 7]  # Days 8-37 ago
+                    rolling_30d.append(historical_temps.mean())
+                else:
+                    rolling_30d.append(np.nan)
 
-        # 4. Temperature volatility (standard deviation of recent temperatures)
-        rolling_std = []
-        for i in range(len(temp_series)):
-            if i >= 15:  # Need at least 15 previous days
-                historical_temps = temp_series.iloc[i - 15 : i - 1]  # Days 2-15 ago
-                rolling_std.append(historical_temps.std())
-            else:
-                rolling_std.append(np.nan)
+            features_df[f"{temp_type}_roll_30d"] = rolling_30d
 
-        features_df["rolling_std_14d"] = rolling_std
+        # 4. Temperature volatility (standard deviation)
+        print("  Adding temperature volatility features...")
+        for temp_type in temp_types:
+            rolling_std = []
+            temp_series = temp_data[temp_type]
 
-        # 5. Seasonal features
+            for i in range(len(temp_series)):
+                if i >= 15:  # Need at least 15 previous days
+                    historical_temps = temp_series.iloc[i - 15 : i - 1]  # Days 2-15 ago
+                    rolling_std.append(historical_temps.std())
+                else:
+                    rolling_std.append(np.nan)
+
+            features_df[f"{temp_type}_std_14d"] = rolling_std
+
+        # 5. Temperature range features (daily max-min difference)
+        print("  Adding temperature range features...")
+        features_df["temp_range_lag_1"] = (temp_data["max"] - temp_data["min"]).shift(1)
+        features_df["temp_range_lag_7"] = (temp_data["max"] - temp_data["min"]).shift(7)
+
+        # 6. Seasonal features
         features_df["is_winter"] = (
             (features_df["month"] == 12)
             | (features_df["month"] == 1)
@@ -300,21 +373,38 @@ class WeatherForecastPipeline:
         # Remove rows with NaN values
         features_df = features_df.dropna()
 
-        # Store feature names (excluding target)
+        # Store feature names (excluding targets)
+        target_columns = [f"temp_{temp_type}" for temp_type in temp_types]
         self.feature_names = [
-            col for col in features_df.columns if col != "temperature"
+            col for col in features_df.columns if col not in target_columns
         ]
 
-        print(f"✅ Created {len(self.feature_names)} features")
+        print(
+            f"✅ Created {len(self.feature_names)} features for multi-temperature prediction"
+        )
         print(f"📊 Clean dataset: {len(features_df)} observations")
-        print(f"🔍 Features: {self.feature_names}")
+        print(f"🎯 Predicting: Max, Min, and Mean daily temperatures")
+        print(f"🔍 Feature categories:")
+        print(f"   • Temporal: 6 features (day of year, month, seasonal cycles)")
+        print(
+            f"   • Lag features: {len([f for f in self.feature_names if 'lag' in f])} features"
+        )
+        print(
+            f"   • Rolling averages: {len([f for f in self.feature_names if 'roll' in f])} features"
+        )
+        print(
+            f"   • Volatility: {len([f for f in self.feature_names if 'std' in f])} features"
+        )
+        print(
+            f"   • Temperature range: {len([f for f in self.feature_names if 'range' in f])} features"
+        )
 
         self.features_data = features_df
         return features_df
 
     def train_model(self, test_size_years: int = 2) -> Dict:
         """
-        Train the best-performing neural network model
+        Train the multi-output neural network model for max, min, and mean temperature prediction
 
         Args:
             test_size_years: Number of years to reserve for testing
@@ -326,11 +416,13 @@ class WeatherForecastPipeline:
         if self.features_data is None:
             raise ValueError("No features available. Run create_ml_features() first.")
 
-        print("🚀 Training neural network model...")
+        print("🚀 Training multi-output neural network model...")
 
-        # Prepare data
+        # Prepare data for multi-output prediction
         X = self.features_data[self.feature_names].values
-        y = self.features_data["temperature"].values
+        y = self.features_data[
+            ["temp_max", "temp_min", "temp_mean"]
+        ].values  # Multi-output target
         dates = self.features_data.index
 
         # Time-based train/test split
@@ -342,15 +434,16 @@ class WeatherForecastPipeline:
 
         print(f"📚 Training samples: {len(X_train)} (until {split_date.date()})")
         print(f"🧪 Testing samples: {len(X_test)}")
+        print(f"🎯 Predicting: Max, Min, and Mean temperatures simultaneously")
 
         # Scale features
         self.scaler = StandardScaler()
         X_train_scaled = self.scaler.fit_transform(X_train)
         X_test_scaled = self.scaler.transform(X_test)
 
-        # Train neural network (best performing architecture from analysis)
+        # Train multi-output neural network
         self.model = MLPRegressor(
-            hidden_layer_sizes=(100, 50),
+            hidden_layer_sizes=(150, 75, 25),  # Slightly larger for multi-output
             activation="relu",
             alpha=0.01,
             learning_rate="adaptive",
@@ -361,77 +454,135 @@ class WeatherForecastPipeline:
             n_iter_no_change=10,
         )
 
-        print("🧠 Training neural network...")
+        print("🧠 Training multi-output neural network...")
         self.model.fit(X_train_scaled, y_train)
 
-        # Evaluate performance
+        # Evaluate performance for each temperature type
         train_pred = self.model.predict(X_train_scaled)
         test_pred = self.model.predict(X_test_scaled)
 
-        train_mae = mean_absolute_error(y_train, train_pred)
-        test_mae = mean_absolute_error(y_test, test_pred)
+        # Calculate MAE for each temperature type
+        temp_types = ["max", "min", "mean"]
+        train_maes = {}
+        test_maes = {}
+
+        for i, temp_type in enumerate(temp_types):
+            train_maes[temp_type] = mean_absolute_error(y_train[:, i], train_pred[:, i])
+            test_maes[temp_type] = mean_absolute_error(y_test[:, i], test_pred[:, i])
+
+        # Overall performance metrics
+        overall_train_mae = np.mean(list(train_maes.values()))
+        overall_test_mae = np.mean(list(test_maes.values()))
 
         # Store performance metrics
         self.model_performance = {
-            "train_mae": train_mae,
-            "test_mae": test_mae,
+            "train_mae_overall": overall_train_mae,
+            "test_mae_overall": overall_test_mae,
+            "train_mae_by_type": train_maes,
+            "test_mae_by_type": test_maes,
             "train_samples": len(X_train),
             "test_samples": len(X_test),
             "split_date": split_date.strftime("%Y-%m-%d"),
             "features_used": len(self.feature_names),
-            "model_type": "Neural Network (MLPRegressor)",
-            "architecture": "100-50 hidden layers",
+            "model_type": "Multi-Output Neural Network (MLPRegressor)",
+            "architecture": "150-75-25 hidden layers",
+            "output_types": temp_types,
         }
 
-        print(f"✅ Model training complete!")
-        print(f"📈 Training MAE: {train_mae:.3f}°C")
-        print(f"📊 Testing MAE: {test_mae:.3f}°C")
+        print(f"✅ Multi-output model training complete!")
+        print(f"📈 Training Performance:")
+        for temp_type, mae in train_maes.items():
+            print(f"   {temp_type.capitalize():>4} temp: {mae:.3f}°C MAE")
+        print(f"   Overall: {overall_train_mae:.3f}°C MAE")
 
-        if test_mae < 3.0:
-            print("🎉 Excellent model performance!")
-        elif test_mae < 4.0:
-            print("✅ Good model performance!")
+        print(f"📊 Testing Performance:")
+        for temp_type, mae in test_maes.items():
+            print(f"   {temp_type.capitalize():>4} temp: {mae:.3f}°C MAE")
+        print(f"   Overall: {overall_test_mae:.3f}°C MAE")
+
+        if overall_test_mae < 3.0:
+            print("🎉 Excellent multi-output model performance!")
+        elif overall_test_mae < 4.0:
+            print("✅ Good multi-output model performance!")
         else:
-            print("📊 Acceptable model performance")
+            print("📊 Acceptable multi-output model performance")
 
         return self.model_performance
 
     def _load_full_weather_data(self) -> pd.DataFrame:
         """Load full weather data from cache files for feature generation"""
 
-        # Try to find cached weather data file
+        # Try to find cached weather data file for this specific station
         cache_files = list(
             Path(".").glob(f"weather_data_station_{self.station_id}_*.csv")
         )
 
         if cache_files:
-            cache_file = cache_files[0]  # Use first available
+            # Sort by modification time, use the most recent
+            cache_files.sort(key=lambda x: x.stat().st_mtime, reverse=True)
+            cache_file = cache_files[0]
+
             print(f"📊 Loading full weather data from {cache_file.name}")
 
             try:
                 df = pd.read_csv(cache_file, index_col=0, parse_dates=True)
-                return df
+
+                # Check if the loaded data has multi-temperature format
+                required_temp_cols = ["temp_max", "temp_min", "temp_mean"]
+                has_multi_temp = all(col in df.columns for col in required_temp_cols)
+
+                if has_multi_temp:
+                    return df
+                else:
+                    print(
+                        f"❌ Cache file {cache_file.name} is in old single-temperature format"
+                    )
+                    print(f"🗑️  Removing incompatible cache file...")
+
+                    # Remove ALL old cache files for this station
+                    for old_cache in cache_files:
+                        try:
+                            old_cache.unlink()
+                            print(f"   Deleted: {old_cache.name}")
+                        except Exception as e:
+                            print(f"   Could not delete {old_cache.name}: {e}")
+
+                    print(
+                        f"💡 Please run with fresh data to generate new multi-temperature cache"
+                    )
+                    return None
+
             except Exception as e:
                 print(f"⚠️  Could not load cache file: {e}")
+                return None
 
-        # Fallback to features_data sample if no cache available
-        if self.features_data is not None:
-            print("📊 Using model's sample data (limited range)")
-            return self.features_data
-
+        # No cache available
+        print("📊 No compatible cache file found")
         return None
 
     def _generate_features_for_date(
         self, target_date: datetime, weather_data: pd.DataFrame
     ) -> Dict[str, float]:
-        """Generate ML features for a specific date using full weather data"""
+        """Generate ML features for a specific date using full weather data for multi-temperature prediction"""
 
         if target_date not in weather_data.index:
             raise ValueError(f"Date {target_date.date()} not found in weather data")
 
         # Get position in weather data
         date_pos = weather_data.index.get_loc(target_date)
-        temp_data = weather_data["temperature"]
+
+        # Temperature data for all three types
+        temp_types = ["max", "min", "mean"]
+        temp_data = {}
+        for temp_type in temp_types:
+            if f"temp_{temp_type}" in weather_data.columns:
+                temp_data[temp_type] = weather_data[f"temp_{temp_type}"]
+            else:
+                # Fallback to old format if new format not available
+                if temp_type == "mean" and "temperature" in weather_data.columns:
+                    temp_data[temp_type] = weather_data["temperature"]
+                else:
+                    raise ValueError(f"Temperature data for {temp_type} not found")
 
         features = {}
 
@@ -442,62 +593,95 @@ class WeatherForecastPipeline:
         features["sin_doy"] = np.sin(2 * np.pi * day_of_year / 365.25)
         features["cos_doy"] = np.cos(2 * np.pi * day_of_year / 365.25)
 
-        # Lag features
+        # Lag features for all temperature types
+        lag_days = [1, 7, 14, 30]
+        for temp_type in temp_types:
+            for lag in lag_days:
+                try:
+                    if date_pos >= lag:
+                        features[f"{temp_type}_lag_{lag}"] = temp_data[temp_type].iloc[
+                            date_pos - lag
+                        ]
+                    else:
+                        features[f"{temp_type}_lag_{lag}"] = temp_data[temp_type].iloc[
+                            max(0, date_pos - 1)
+                        ]
+                except:
+                    # Fallback value
+                    features[f"{temp_type}_lag_{lag}"] = temp_data[temp_type].mean()
+
+        # Rolling averages for all temperature types
+        for temp_type in temp_types:
+            try:
+                # 7-day rolling average
+                if date_pos >= 8:
+                    historical_temps = temp_data[temp_type].iloc[
+                        date_pos - 8 : date_pos - 1
+                    ]
+                    features[f"{temp_type}_roll_7d"] = historical_temps.mean()
+                else:
+                    features[f"{temp_type}_roll_7d"] = (
+                        temp_data[temp_type].iloc[: max(1, date_pos)].mean()
+                    )
+
+                # 30-day rolling average
+                if date_pos >= 37:
+                    historical_temps = temp_data[temp_type].iloc[
+                        date_pos - 37 : date_pos - 7
+                    ]
+                    features[f"{temp_type}_roll_30d"] = historical_temps.mean()
+                else:
+                    features[f"{temp_type}_roll_30d"] = (
+                        temp_data[temp_type].iloc[: max(1, date_pos)].mean()
+                    )
+            except:
+                # Fallback values
+                mean_temp = temp_data[temp_type].mean()
+                features[f"{temp_type}_roll_7d"] = mean_temp
+                features[f"{temp_type}_roll_30d"] = mean_temp
+
+        # Temperature volatility (standard deviation)
+        for temp_type in temp_types:
+            try:
+                if date_pos >= 15:
+                    historical_temps = temp_data[temp_type].iloc[
+                        date_pos - 15 : date_pos - 1
+                    ]
+                    features[f"{temp_type}_std_14d"] = historical_temps.std()
+                else:
+                    features[f"{temp_type}_std_14d"] = (
+                        temp_data[temp_type].iloc[: max(1, date_pos)].std()
+                    )
+            except:
+                features[f"{temp_type}_std_14d"] = 5.0  # Reasonable default
+
+        # Temperature range features
         try:
             if date_pos >= 1:
-                features["temp_lag_1"] = temp_data.iloc[date_pos - 1]
+                yesterday_range = (
+                    temp_data["max"].iloc[date_pos - 1]
+                    - temp_data["min"].iloc[date_pos - 1]
+                )
+                features["temp_range_lag_1"] = yesterday_range
             else:
-                features["temp_lag_1"] = temp_data.iloc[date_pos]
+                features["temp_range_lag_1"] = (
+                    temp_data["max"] - temp_data["min"]
+                ).mean()
 
             if date_pos >= 7:
-                features["temp_lag_7"] = temp_data.iloc[date_pos - 7]
+                week_ago_range = (
+                    temp_data["max"].iloc[date_pos - 7]
+                    - temp_data["min"].iloc[date_pos - 7]
+                )
+                features["temp_range_lag_7"] = week_ago_range
             else:
-                features["temp_lag_7"] = temp_data.iloc[max(0, date_pos - 1)]
-
-            if date_pos >= 14:
-                features["temp_lag_14"] = temp_data.iloc[date_pos - 14]
-            else:
-                features["temp_lag_14"] = temp_data.iloc[max(0, date_pos - 1)]
-
-            if date_pos >= 30:
-                features["temp_lag_30"] = temp_data.iloc[date_pos - 30]
-            else:
-                features["temp_lag_30"] = temp_data.iloc[max(0, date_pos - 1)]
+                features["temp_range_lag_7"] = (
+                    temp_data["max"] - temp_data["min"]
+                ).mean()
         except:
-            # Fallback values
-            mean_temp = temp_data.mean()
-            features["temp_lag_1"] = mean_temp
-            features["temp_lag_7"] = mean_temp
-            features["temp_lag_14"] = mean_temp
-            features["temp_lag_30"] = mean_temp
-
-        # Rolling averages (carefully calculated to avoid leakage)
-        try:
-            if date_pos >= 8:
-                historical_temps = temp_data.iloc[date_pos - 8 : date_pos - 1]
-                features["rolling_7d_mean"] = historical_temps.mean()
-            else:
-                features["rolling_7d_mean"] = temp_data.iloc[: max(1, date_pos)].mean()
-
-            if date_pos >= 37:
-                historical_temps = temp_data.iloc[date_pos - 37 : date_pos - 7]
-                features["rolling_30d_mean"] = historical_temps.mean()
-            else:
-                features["rolling_30d_mean"] = temp_data.iloc[: max(1, date_pos)].mean()
-        except:
-            mean_temp = temp_data.mean()
-            features["rolling_7d_mean"] = mean_temp
-            features["rolling_30d_mean"] = mean_temp
-
-        # Rolling standard deviation
-        try:
-            if date_pos >= 15:
-                historical_temps = temp_data.iloc[date_pos - 15 : date_pos - 1]
-                features["rolling_std_14d"] = historical_temps.std()
-            else:
-                features["rolling_std_14d"] = temp_data.iloc[: max(1, date_pos)].std()
-        except:
-            features["rolling_std_14d"] = 5.0  # Reasonable default
+            # Fallback for temperature range
+            features["temp_range_lag_1"] = 10.0  # Reasonable default range
+            features["temp_range_lag_7"] = 10.0
 
         # Seasonal features
         features["is_winter"] = 1 if target_date.month in [12, 1, 2] else 0
@@ -534,7 +718,14 @@ class WeatherForecastPipeline:
         full_weather_data = self._load_full_weather_data()
 
         if full_weather_data is None:
-            raise ValueError("No weather data available for feature generation")
+            # Fallback to features_data sample if no cache available
+            if self.features_data is not None:
+                print("📊 Using model's training data sample (limited range)")
+                full_weather_data = self.features_data
+            else:
+                raise ValueError(
+                    "No weather data available for feature generation. Please run the complete pipeline first."
+                )
 
         # Check if we have data for this date
         if forecast_date not in full_weather_data.index:
@@ -561,68 +752,107 @@ class WeatherForecastPipeline:
         features = self._generate_features_for_date(forecast_date, full_weather_data)
 
         # Get temperature data for seasonal adjustments
-        temp_data = full_weather_data["temperature"]
+        temp_data = {}
+        for temp_type in ["max", "min", "mean"]:
+            if f"temp_{temp_type}" in full_weather_data.columns:
+                temp_data[temp_type] = full_weather_data[f"temp_{temp_type}"]
+            elif temp_type == "mean" and "temperature" in full_weather_data.columns:
+                temp_data[temp_type] = full_weather_data["temperature"]
 
-        # Create forecasts for different horizons using iterative approach
+        # Create forecasts for different horizons using multi-output prediction
         forecasts = {}
 
         for horizon in horizons:
             target_date = forecast_date + timedelta(days=horizon)
 
             if horizon == 1:
-                # 1-day forecast: Use current features directly
+                # 1-day forecast: Use current features directly for multi-output prediction
                 feature_vector = np.array(
                     [features[name] for name in self.feature_names]
                 ).reshape(1, -1)
                 feature_vector_scaled = self.scaler.transform(feature_vector)
-                prediction = self.model.predict(feature_vector_scaled)[0]
+                predictions = self.model.predict(feature_vector_scaled)[
+                    0
+                ]  # Returns [max, min, mean]
+
+                temp_max, temp_min, temp_mean = (
+                    predictions[0],
+                    predictions[1],
+                    predictions[2],
+                )
                 confidence = "high"
 
             else:
                 # Multi-day forecast: Use iterative approach with seasonal adjustments
-                # Start with base prediction for tomorrow
+                # Start with base prediction
                 feature_vector = np.array(
                     [features[name] for name in self.feature_names]
                 ).reshape(1, -1)
                 feature_vector_scaled = self.scaler.transform(feature_vector)
-                base_prediction = self.model.predict(feature_vector_scaled)[0]
+                base_predictions = self.model.predict(feature_vector_scaled)[
+                    0
+                ]  # [max, min, mean]
 
-                # Apply seasonal trend adjustment based on historical data
+                # Apply seasonal adjustments for each temperature type
+                adjusted_temps = {}
                 target_doy = target_date.timetuple().tm_yday
                 current_doy = forecast_date.timetuple().tm_yday
 
-                # Get historical temperatures for this day of year
-                historical_temps_target = temp_data[
-                    temp_data.index.dayofyear == target_doy
-                ]
-                historical_temps_current = temp_data[
-                    temp_data.index.dayofyear == current_doy
-                ]
+                for i, temp_type in enumerate(["max", "min", "mean"]):
+                    base_prediction = base_predictions[i]
 
-                if (
-                    len(historical_temps_target) > 0
-                    and len(historical_temps_current) > 0
-                ):
-                    # Calculate seasonal difference
-                    avg_temp_target = historical_temps_target.mean()
-                    avg_temp_current = historical_temps_current.mean()
-                    seasonal_diff = avg_temp_target - avg_temp_current
+                    if temp_type in temp_data:
+                        # Get historical temperatures for seasonal adjustment
+                        historical_temps_target = temp_data[temp_type][
+                            temp_data[temp_type].index.dayofyear == target_doy
+                        ]
+                        historical_temps_current = temp_data[temp_type][
+                            temp_data[temp_type].index.dayofyear == current_doy
+                        ]
 
-                    # Apply seasonal adjustment with decay for longer horizons
-                    seasonal_weight = 0.5 * np.exp(
-                        -horizon / 14.0
-                    )  # Decay over 2 weeks
-                    seasonal_adjustment = seasonal_diff * seasonal_weight
+                        if (
+                            len(historical_temps_target) > 0
+                            and len(historical_temps_current) > 0
+                        ):
+                            # Calculate seasonal difference
+                            avg_temp_target = historical_temps_target.mean()
+                            avg_temp_current = historical_temps_current.mean()
+                            seasonal_diff = avg_temp_target - avg_temp_current
 
-                    prediction = base_prediction + seasonal_adjustment
-                else:
-                    # Fallback: slight random variation to avoid identical predictions
-                    prediction = base_prediction + np.random.normal(0, 0.5)
+                            # Apply seasonal adjustment with decay for longer horizons
+                            seasonal_weight = 0.5 * np.exp(
+                                -horizon / 14.0
+                            )  # Decay over 2 weeks
+                            seasonal_adjustment = seasonal_diff * seasonal_weight
 
-                # Add some uncertainty for longer horizons
+                            prediction = base_prediction + seasonal_adjustment
+                        else:
+                            # Fallback: slight random variation to avoid identical predictions
+                            prediction = base_prediction + np.random.normal(0, 0.5)
+                    else:
+                        prediction = base_prediction + np.random.normal(0, 0.5)
+
+                    # Add some uncertainty for longer horizons
+                    if horizon > 7:
+                        uncertainty = np.random.normal(0, 0.3 * (horizon / 7.0))
+                        prediction += uncertainty
+
+                    adjusted_temps[temp_type] = prediction
+
+                temp_max = adjusted_temps["max"]
+                temp_min = adjusted_temps["min"]
+                temp_mean = adjusted_temps["mean"]
+
+                # Ensure logical relationships (max >= mean >= min)
+                if temp_max < temp_mean:
+                    temp_max = temp_mean + abs(temp_max - temp_mean)
+                if temp_min > temp_mean:
+                    temp_min = temp_mean - abs(temp_min - temp_mean)
+                if temp_max < temp_min:
+                    temp_max, temp_min = temp_min, temp_max
+
+                # Set confidence based on horizon
                 if horizon > 7:
-                    uncertainty = np.random.normal(0, 0.3 * (horizon / 7.0))
-                    prediction += uncertainty
                     confidence = "low"
                 elif horizon > 3:
                     confidence = "medium"
@@ -631,7 +861,10 @@ class WeatherForecastPipeline:
 
             forecasts[f"{horizon}_day"] = {
                 "date": target_date.strftime("%Y-%m-%d"),
-                "temperature": round(float(prediction), 1),
+                "temperature_max": round(float(temp_max), 1),
+                "temperature_min": round(float(temp_min), 1),
+                "temperature_mean": round(float(temp_mean), 1),
+                "temperature_range": round(float(temp_max - temp_min), 1),
                 "horizon_days": horizon,
                 "confidence": confidence,
             }
@@ -644,15 +877,26 @@ class WeatherForecastPipeline:
             "generated_at": datetime.now().isoformat(),
             "forecasts": forecasts,
             "model_performance": {
-                "expected_mae": f"{self.model_performance.get('test_mae', self.model_performance.get('expected_mae', 'Unknown')):.3f}°C",
+                "expected_mae_overall": f"{self.model_performance.get('test_mae_overall', self.model_performance.get('test_mae', 'Unknown')):.3f}°C",
+                "expected_mae_by_type": (
+                    {
+                        temp_type: f"{mae:.3f}°C"
+                        for temp_type, mae in self.model_performance.get(
+                            "test_mae_by_type", {}
+                        ).items()
+                    }
+                    if "test_mae_by_type" in self.model_performance
+                    else {}
+                ),
                 "model_type": self.model_performance["model_type"],
                 "training_data_end": full_weather_data.index.max().strftime("%Y-%m-%d"),
             },
             "notes": [
-                "Forecasts are for daily mean temperature",
-                "1-day forecasts use ML model directly",
+                "Forecasts include daily maximum, minimum, and mean temperatures",
+                "1-day forecasts use multi-output ML model directly (highest accuracy)",
                 "Multi-day forecasts use seasonal adjustments and trend analysis",
-                "Accuracy decreases with longer forecast horizons",
+                "Temperature relationships are maintained (max ≥ mean ≥ min)",
+                "Confidence decreases with longer forecast horizons",
                 f"Based on {len(full_weather_data)} days of historical data",
             ],
         }
@@ -722,15 +966,29 @@ class WeatherForecastPipeline:
         print(f"📍 Location: {self.location_name}")
 
         # Handle different MAE key names for compatibility
-        mae_value = self.model_performance.get(
-            "test_mae"
-        ) or self.model_performance.get("expected_mae", "Unknown")
-        mae_display = (
-            f"{mae_value:.3f}°C"
-            if isinstance(mae_value, (int, float))
-            else str(mae_value)
-        )
-        print(f"🎯 Expected performance: ±{mae_display}")
+        if "test_mae_overall" in self.model_performance:
+            # New multi-output format
+            mae_overall = self.model_performance["test_mae_overall"]
+            print(f"🎯 Expected performance (overall): {mae_overall:.3f}°C")
+
+            if "test_mae_by_type" in self.model_performance:
+                print(f"🎯 Expected performance by type:")
+                for temp_type, mae in self.model_performance[
+                    "test_mae_by_type"
+                ].items():
+                    print(f"   {temp_type.capitalize()}: {mae:.3f}°C")
+        else:
+            # Legacy single-output format
+            mae_value = self.model_performance.get(
+                "test_mae"
+            ) or self.model_performance.get("expected_mae", "Unknown")
+            mae_display = (
+                f"{mae_value:.3f}°C"
+                if isinstance(mae_value, (int, float))
+                else str(mae_value)
+            )
+            print(f"🎯 Expected performance: {mae_display}")
+            print("   (Legacy single-output model - mean temperature only)")
 
     def run_complete_pipeline(
         self,
@@ -783,7 +1041,24 @@ class WeatherForecastPipeline:
 
         print(f"\n🎉 Pipeline completed successfully!")
         print(f"📊 Data: {len(raw_data)} records processed")
-        print(f"🧠 Model: {performance['test_mae']:.2f}°C MAE")
+
+        # Display performance based on model type
+        if "test_mae_overall" in performance:
+            print(f"🧠 Model: {performance['test_mae_overall']:.2f}°C MAE (overall)")
+            print(f"   Performance by type:")
+            for temp_type, mae in performance.get("test_mae_by_type", {}).items():
+                print(f"     {temp_type.capitalize()}: {mae:.2f}°C MAE")
+        else:
+            # Legacy format
+            test_mae = performance.get(
+                "test_mae", performance.get("expected_mae", "Unknown")
+            )
+            print(
+                f"🧠 Model: {test_mae:.2f}°C MAE"
+                if isinstance(test_mae, (int, float))
+                else f"🧠 Model: {test_mae}"
+            )
+
         print(f"💾 Saved: {model_path}")
 
         return results
@@ -860,11 +1135,29 @@ Examples:
             print(f"\n🔮 Forecast Results:")
             print(f"Location: {forecast['location']}")
             print(f"From: {forecast['forecast_from']}")
-            print("\nForecasts:")
+            print("\nTemperature Forecasts:")
             for horizon, pred in forecast["forecasts"].items():
-                print(
-                    f"  {pred['horizon_days']:2d} days: {pred['temperature']:6.1f}°C on {pred['date']}"
-                )
+                if "temperature_max" in pred:
+                    # Multi-temperature format
+                    max_temp = pred["temperature_max"]
+                    min_temp = pred["temperature_min"]
+                    mean_temp = pred["temperature_mean"]
+                    temp_range = pred["temperature_range"]
+                    confidence = pred["confidence"]
+                    confidence_emoji = (
+                        "🎯"
+                        if confidence == "high"
+                        else "📊" if confidence == "medium" else "🤔"
+                    )
+                    print(
+                        f"  {pred['horizon_days']:2d} days ({pred['date']}): {max_temp}°C/{min_temp}°C (avg: {mean_temp}°C, range: {temp_range}°C) {confidence_emoji}"
+                    )
+                else:
+                    # Legacy single temperature format
+                    temp = pred.get("temperature", "N/A")
+                    print(
+                        f"  {pred['horizon_days']:2d} days: {temp}°C on {pred['date']}"
+                    )
         else:
             print("Use --forecast-date to generate forecasts")
 
@@ -879,10 +1172,29 @@ Examples:
 
         print(f"\n📋 Example Forecast:")
         example = results["example_forecast"]
+        print(f"Location: {example['location']}")
+        print(f"Forecast from: {example['forecast_from']}")
+        print(f"Temperature predictions:")
         for horizon, pred in example["forecasts"].items():
-            print(
-                f"  {pred['horizon_days']:2d} days: {pred['temperature']:6.1f}°C on {pred['date']}"
-            )
+            if "temperature_max" in pred:
+                # New multi-output format
+                max_temp = pred["temperature_max"]
+                min_temp = pred["temperature_min"]
+                mean_temp = pred["temperature_mean"]
+                temp_range = pred["temperature_range"]
+                confidence = pred["confidence"]
+                confidence_emoji = (
+                    "🎯"
+                    if confidence == "high"
+                    else "📊" if confidence == "medium" else "🤔"
+                )
+                print(
+                    f"  {pred['horizon_days']:2d} days ({pred['date']}): {max_temp}°C/{min_temp}°C (avg: {mean_temp}°C, range: {temp_range}°C) {confidence_emoji}"
+                )
+            else:
+                # Legacy single-output format
+                temp = pred.get("temperature", "N/A")
+                print(f"  {pred['horizon_days']:2d} days: {temp}°C on {pred['date']}")
 
     else:
         parser.print_help()
