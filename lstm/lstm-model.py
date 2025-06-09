@@ -13,7 +13,7 @@ try:
     import tensorflow as tf
     from tensorflow.keras.models import Sequential, Model
     from tensorflow.keras.layers import LSTM, Dense, Dropout, Input, Bidirectional
-    from tensorflow.keras.optimizers.legacy import Adam
+    from tensorflow.keras.optimizers import Adam
     from tensorflow.keras.callbacks import EarlyStopping, ReduceLROnPlateau
     from tensorflow.keras.regularizers import l2
 

@@ -20,7 +20,7 @@ try:
         MaxPooling1D,
     )
     from tensorflow.keras.layers import BatchNormalization, Activation, Add, Lambda
-    from tensorflow.keras.optimizers.legacy import Adam
+    from tensorflow.keras.optimizers import Adam
     from tensorflow.keras.callbacks import EarlyStopping, ReduceLROnPlateau
     from tensorflow.keras.regularizers import l2
 

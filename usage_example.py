@@ -20,6 +20,31 @@ except ImportError as e:
     sys.exit(1)
 
 
+def format_temperature_display(forecast):
+    """Helper function to format temperature display for both single and multi-temperature formats"""
+    if "temperature_max" in forecast:
+        # Multi-temperature format
+        max_temp = forecast["temperature_max"]
+        min_temp = forecast["temperature_min"]
+        mean_temp = forecast["temperature_mean"]
+        temp_range = forecast["temperature_range"]
+        return f"{max_temp}°C/{min_temp}°C (avg: {mean_temp}°C, range: {temp_range}°C)"
+    else:
+        # Legacy single temperature format
+        temp = forecast.get("temperature", "N/A")
+        return f"{temp}°C"
+
+
+def get_mean_temperature(forecast):
+    """Helper function to get mean temperature from either format"""
+    if "temperature_mean" in forecast:
+        return forecast["temperature_mean"]
+    elif "temperature" in forecast:
+        return forecast["temperature"]
+    else:
+        return None
+
+
 def example_1_direct_python_usage():
     """Example 1: Direct Python usage with unified pipeline"""
 
@@ -64,8 +89,9 @@ def example_1_direct_python_usage():
                 if confidence == "high"
                 else "📊" if confidence == "medium" else "🤔"
             )
+            temp_display = format_temperature_display(forecast)
             print(
-                f"  {horizon}: {forecast['temperature']}°C on {forecast['date']} {confidence_emoji}"
+                f"  {horizon}: {temp_display} on {forecast['date']} {confidence_emoji}"
             )
 
         # Multiple horizons
@@ -75,12 +101,16 @@ def example_1_direct_python_usage():
         )
 
         for horizon, forecast in extended_result["forecasts"].items():
+            temp_display = format_temperature_display(forecast)
             print(
-                f"  {forecast['horizon_days']:2d} days: {forecast['temperature']:5.1f}°C ({forecast['confidence']})"
+                f"  {forecast['horizon_days']:2d} days: {temp_display} ({forecast['confidence']})"
             )
 
     except Exception as e:
         print(f"❌ Error in direct usage: {e}")
+        import traceback
+
+        traceback.print_exc()
 
 
 def example_2_api_usage():
@@ -100,6 +130,7 @@ def example_2_api_usage():
             health_data = response.json()
             print(f"✓ API server is healthy")
             print(f"  Location: {health_data.get('location', 'Unknown')}")
+            print(f"  Model format: {health_data.get('model_format', 'Unknown')}")
         else:
             print(f"⚠️ API health check failed: {response.status_code}")
 
@@ -121,8 +152,9 @@ def example_2_api_usage():
                     if confidence == "high"
                     else "📊" if confidence == "medium" else "🤔"
                 )
+                temp_display = format_temperature_display(forecast)
                 print(
-                    f"  {horizon}: {forecast['temperature']}°C on {forecast['date']} {confidence_emoji}"
+                    f"  {horizon}: {temp_display} on {forecast['date']} {confidence_emoji}"
                 )
         else:
             print(f"❌ API Error: {response.status_code}")
@@ -142,6 +174,7 @@ def example_2_api_usage():
             print(f"  Station ID: {location_info.get('station_id', 'Unknown')}")
             print(f"  Model: {model_info.get('type', 'Unknown')}")
             print(f"  Expected MAE: {model_info.get('expected_mae', 'Unknown')}")
+            print(f"  Model Format: {model_info.get('format', 'Unknown')}")
             print(f"  Data Records: {data_info.get('total_records', 'Unknown')}")
             print(
                 f"  Date Range: {data_info.get('date_range', {}).get('start', 'Unknown')} to {data_info.get('date_range', {}).get('end', 'Unknown')}"
@@ -196,54 +229,55 @@ def example_3_canoe_trip_planner():
 
                 # Use appropriate forecast horizon
                 if day == 0:
-                    temp = result["forecasts"]["1_day"]["temperature"]
+                    forecast_data = result["forecasts"]["1_day"]
                     horizon = "1-day"
-                    confidence = result["forecasts"]["1_day"]["confidence"]
                 elif day <= 2:
-                    temp = result["forecasts"]["3_day"]["temperature"]
+                    forecast_data = result["forecasts"]["3_day"]
                     horizon = "3-day"
-                    confidence = result["forecasts"]["3_day"]["confidence"]
                 elif day <= 6:
-                    temp = result["forecasts"]["7_day"]["temperature"]
+                    forecast_data = result["forecasts"]["7_day"]
                     horizon = "7-day"
-                    confidence = result["forecasts"]["7_day"]["confidence"]
                 elif day <= 13:
-                    temp = result["forecasts"]["14_day"]["temperature"]
+                    forecast_data = result["forecasts"]["14_day"]
                     horizon = "14-day"
-                    confidence = result["forecasts"]["14_day"]["confidence"]
                 else:
-                    temp = result["forecasts"]["30_day"]["temperature"]
+                    forecast_data = result["forecasts"]["30_day"]
                     horizon = "30-day"
-                    confidence = result["forecasts"]["30_day"]["confidence"]
 
-                daily_forecasts.append(temp)
+                # Get mean temperature for analysis
+                temp = get_mean_temperature(forecast_data)
+                confidence = forecast_data["confidence"]
 
-                # Generate recommendations
-                if temp < 5:
-                    recommendation = "❄️  Very cold - bring winter gear"
-                    comfort = "Challenging"
-                elif temp < 15:
-                    recommendation = "🧥 Cool - pack warm layers"
-                    comfort = "Good with prep"
-                elif temp < 25:
-                    recommendation = "👕 Pleasant - perfect for canoeing"
-                    comfort = "Excellent"
-                else:
-                    recommendation = "🌡️  Hot - stay hydrated, sun protection"
-                    comfort = "Good with precautions"
+                if temp is not None:
+                    daily_forecasts.append(temp)
 
-                confidence_emoji = (
-                    "🎯"
-                    if confidence == "high"
-                    else "📊" if confidence == "medium" else "🤔"
-                )
+                    # Generate recommendations
+                    if temp < 5:
+                        recommendation = "❄️  Very cold - bring winter gear"
+                        comfort = "Challenging"
+                    elif temp < 15:
+                        recommendation = "🧥 Cool - pack warm layers"
+                        comfort = "Good with prep"
+                    elif temp < 25:
+                        recommendation = "👕 Pleasant - perfect for canoeing"
+                        comfort = "Excellent"
+                    else:
+                        recommendation = "🌡️  Hot - stay hydrated, sun protection"
+                        comfort = "Good with precautions"
 
-                print(
-                    f"Day {day+1} ({trip_day.strftime('%Y-%m-%d')}): {temp}°C ({horizon}) {confidence_emoji}"
-                )
-                print(f"  Comfort: {comfort}")
-                print(f"  Tip: {recommendation}")
-                print()
+                    confidence_emoji = (
+                        "🎯"
+                        if confidence == "high"
+                        else "📊" if confidence == "medium" else "🤔"
+                    )
+
+                    temp_display = format_temperature_display(forecast_data)
+                    print(
+                        f"Day {day+1} ({trip_day.strftime('%Y-%m-%d')}): {temp_display} ({horizon}) {confidence_emoji}"
+                    )
+                    print(f"  Comfort: {comfort}")
+                    print(f"  Tip: {recommendation}")
+                    print()
 
             # Overall trip assessment
             if daily_forecasts:
@@ -271,6 +305,9 @@ def example_3_canoe_trip_planner():
 
     except Exception as e:
         print(f"❌ Error in trip planning: {e}")
+        import traceback
+
+        traceback.print_exc()
 
 
 def example_4_batch_processing():
@@ -296,13 +333,17 @@ def example_4_batch_processing():
 
             for forecast in data["forecasts"]:
                 date = forecast["forecast_from"]
-                temp_1 = forecast["forecasts"]["1_day"]["temperature"]
-                temp_7 = forecast["forecasts"]["7_day"]["temperature"]
-                conf_1 = forecast["forecasts"]["1_day"]["confidence"]
-                conf_7 = forecast["forecasts"]["7_day"]["confidence"]
+                forecast_1 = forecast["forecasts"]["1_day"]
+                forecast_7 = forecast["forecasts"]["7_day"]
+
+                temp_1_display = format_temperature_display(forecast_1)
+                temp_7_display = format_temperature_display(forecast_7)
+
+                conf_1 = forecast_1["confidence"]
+                conf_7 = forecast_7["confidence"]
 
                 print(
-                    f"  {date}: 1-day={temp_1}°C ({conf_1}), 7-day={temp_7}°C ({conf_7})"
+                    f"  {date}: 1-day={temp_1_display} ({conf_1}), 7-day={temp_7_display} ({conf_7})"
                 )
 
         else:
@@ -316,6 +357,9 @@ def example_4_batch_processing():
         example_4_direct_batch()
     except Exception as e:
         print(f"❌ Batch processing error: {e}")
+        import traceback
+
+        traceback.print_exc()
 
 
 def example_4_direct_batch():
@@ -343,19 +387,26 @@ def example_4_direct_batch():
 
             try:
                 result = pipeline.predict_temperature(date_str, horizons=[1, 7])
-                temp_1 = result["forecasts"]["1_day"]["temperature"]
-                temp_7 = result["forecasts"]["7_day"]["temperature"]
-                conf_1 = result["forecasts"]["1_day"]["confidence"]
-                conf_7 = result["forecasts"]["7_day"]["confidence"]
+                forecast_1 = result["forecasts"]["1_day"]
+                forecast_7 = result["forecasts"]["7_day"]
+
+                temp_1_display = format_temperature_display(forecast_1)
+                temp_7_display = format_temperature_display(forecast_7)
+
+                conf_1 = forecast_1["confidence"]
+                conf_7 = forecast_7["confidence"]
 
                 print(
-                    f"  {date_str}: 1-day={temp_1}°C ({conf_1}), 7-day={temp_7}°C ({conf_7})"
+                    f"  {date_str}: 1-day={temp_1_display} ({conf_1}), 7-day={temp_7_display} ({conf_7})"
                 )
             except Exception as e:
                 print(f"  {date_str}: Error - {e}")
 
     except Exception as e:
         print(f"❌ Direct batch processing error: {e}")
+        import traceback
+
+        traceback.print_exc()
 
 
 def example_5_server_integration():
@@ -388,13 +439,27 @@ def example_5_server_integration():
                     if endpoint.startswith("/forecast"):
                         forecasts = data.get("forecasts", {})
                         print(f"  📊 Forecasts generated: {len(forecasts)}")
+
+                        # Show a sample forecast with proper formatting
+                        if forecasts:
+                            sample_key = list(forecasts.keys())[0]
+                            sample_forecast = forecasts[sample_key]
+                            temp_display = format_temperature_display(sample_forecast)
+                            print(f"  📋 Sample ({sample_key}): {temp_display}")
+
                     elif endpoint.startswith("/model_info"):
                         model_info = data.get("model_info", {})
                         print(f"  🧠 Model type: {model_info.get('type', 'Unknown')}")
+                        print(
+                            f"  🎯 Model format: {model_info.get('format', 'Unknown')}"
+                        )
                     elif endpoint.startswith("/health"):
                         print(f"  💚 Status: {data.get('status', 'Unknown')}")
-                except:
-                    print(f"  📄 Response received")
+                        print(
+                            f"  🔧 Model format: {data.get('model_format', 'Unknown')}"
+                        )
+                except Exception as inner_e:
+                    print(f"  📄 Response received (parsing error: {inner_e})")
             else:
                 print(f"  ❌ Failed ({response.status_code})")
 
@@ -445,6 +510,7 @@ def main():
     print("✅ Single-command pipeline (download → features → train → predict)")
     print("✅ Automatic data caching (no repeated downloads)")
     print("✅ Multi-horizon forecasting (1 to 30 days)")
+    print("✅ Multi-temperature predictions (max/min/mean)")
     print("✅ Confidence indicators (high/medium/low)")
     print("✅ Direct Python API")
     print("✅ RESTful web service")

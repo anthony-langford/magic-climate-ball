@@ -1,5 +1,6 @@
 ![Pepe](pepe.jpg)
 ![LSTM Comprehensive Analysis](lstm/lstm_comprehensive_analysis.png)
+![SARIMA Comprehensive Analysis](sarima/optimized_sarima_comprehensive.png)
 
 Keep going for AI-written documentation
 <br><br><br><br><br><br><br>
@@ -155,11 +156,11 @@ curl "http://localhost:5001/health"
 
 ```
 weather-forecast-system/
-├── lstm                         # LSTM implementation
+├── lstm                         # LSTM implementation (simple, deep, bidirectional)
 ├── ml                           # ML implementations (neural net, gradient boosting, random forest, elastic net, etc)
 ├── prophet                      # Prophet implementation
-├── sarima                       # SARIMA implementation
-├── tcn                          # TCN implementation
+├── sarima                       # SARIMA implementation (MA, seasonal, non-seasonal)
+├── tcn                          # TCN implementation (simple, deep, wide)
 ├── notebooks                    # Research notebooks (data pipeline, baseline modeling, feature engineering)
 ├── weather_forecast.py          # Main pipeline (train multi-temperature models)
 ├── server.py                    # REST API server (multi-temperature support)

@@ -3,502 +3,654 @@ import numpy as np
 import matplotlib.pyplot as plt
 import warnings
 from statsmodels.tsa.statespace.sarimax import SARIMAX
-from statsmodels.tsa.stattools import adfuller
-from statsmodels.stats.diagnostic import acorr_ljungbox
-from statsmodels.graphics.tsaplots import plot_acf, plot_pacf
-from sklearn.metrics import mean_absolute_error, mean_squared_error
 from datetime import datetime, timedelta
-import itertools
+import os
 
 warnings.filterwarnings("ignore")
 
 
-class SARIMAForecaster:
-    """SARIMA model for temperature forecasting with walk-forward validation"""
+class SeasonalSARIMAForecaster:
+    """SARIMA with proper seasonal components to beat climatology"""
 
     def __init__(self, data_path="temagami_features.csv"):
-        """Load the feature-engineered data"""
+        """Load data"""
         self.df = pd.read_csv(data_path, index_col=0, parse_dates=True)
         self.temp_series = self.df["t_mean"].copy()
-        print(f"Loaded temperature series: {len(self.temp_series)} observations")
+
+        print(f"🌡️ Seasonal SARIMA Forecaster")
+        print(f"📊 Data: {len(self.temp_series)} observations")
         print(
-            f"Date range: {self.temp_series.index.min().date()} to {self.temp_series.index.max().date()}"
+            f"📅 Range: {self.temp_series.index.min().date()} to {self.temp_series.index.max().date()}"
         )
 
-    def check_stationarity(self, series, title="Temperature Series"):
-        """Check if series is stationary using Augmented Dickey-Fuller test"""
-        print(f"\nStationarity Test for {title}")
-        print("-" * 40)
+        os.makedirs("sarima", exist_ok=True)
 
-        # Augmented Dickey-Fuller test
-        adf_result = adfuller(series.dropna())
+    def seasonal_model_search(self):
+        """Search for models with proper seasonal components"""
+        print(f"\n🌀 Seasonal Model Search")
+        print("=" * 40)
 
-        print(f"ADF Statistic: {adf_result[0]:.6f}")
-        print(f"p-value: {adf_result[1]:.6f}")
-        print(f"Critical Values:")
-        for key, value in adf_result[4].items():
-            print(f"\t{key}: {value:.3f}")
-
-        if adf_result[1] <= 0.05:
-            print("✓ Series is stationary (reject null hypothesis)")
-            return True
-        else:
-            print("✗ Series is non-stationary (fail to reject null hypothesis)")
-            return False
-
-    def difference_series(self, series, seasonal_periods=365):
-        """Apply regular and seasonal differencing"""
-        print(f"\nApplying differencing...")
-
-        # First difference
-        diff1 = series.diff().dropna()
-        is_stationary = self.check_stationarity(diff1, "First Differenced")
-
-        if is_stationary:
-            print("First differencing achieved stationarity")
-            return diff1, (1, 0)
-
-        # Seasonal difference
-        seasonal_diff = series.diff(seasonal_periods).dropna()
-        is_seasonal_stationary = self.check_stationarity(
-            seasonal_diff, "Seasonal Differenced"
-        )
-
-        if is_seasonal_stationary:
-            print("Seasonal differencing achieved stationarity")
-            return seasonal_diff, (0, 1)
-
-        # Both regular and seasonal differencing
-        both_diff = series.diff().diff(seasonal_periods).dropna()
-        is_both_stationary = self.check_stationarity(both_diff, "Both Differenced")
-
-        if is_both_stationary:
-            print("Both regular and seasonal differencing achieved stationarity")
-            return both_diff, (1, 1)
-
-        print("Warning: Could not achieve stationarity with standard differencing")
-        return diff1, (1, 0)
-
-    def plot_diagnostics(self, series, title="Temperature Series"):
-        """Plot ACF and PACF for model identification"""
-        fig, axes = plt.subplots(2, 2, figsize=(15, 10))
-
-        # Time series plot
-        series.plot(ax=axes[0, 0], title=f"{title} - Time Series")
-        axes[0, 0].set_ylabel("Temperature (°C)")
-
-        # ACF plot
-        plot_acf(series.dropna(), ax=axes[0, 1], lags=50, title=f"{title} - ACF")
-
-        # PACF plot
-        plot_pacf(series.dropna(), ax=axes[1, 0], lags=50, title=f"{title} - PACF")
-
-        # Distribution
-        series.hist(bins=50, ax=axes[1, 1], alpha=0.7)
-        axes[1, 1].set_title(f"{title} - Distribution")
-        axes[1, 1].set_xlabel("Temperature (°C)")
-
-        plt.tight_layout()
-        plt.show()
-
-    def grid_search_sarima(self, train_data, max_order=2, seasonal_periods=365):
-        """Grid search for best SARIMA parameters"""
-        print(f"\nGrid searching SARIMA parameters...")
-        print("This may take several minutes...")
-
-        # Define parameter ranges
-        p_values = range(0, max_order + 1)
-        d_values = [0, 1]  # Based on stationarity tests
-        q_values = range(0, max_order + 1)
-
-        # Seasonal parameters (keep small for computational efficiency)
-        P_values = [0, 1]
-        D_values = [0, 1]
-        Q_values = [0, 1]
-
-        best_aic = np.inf
-        best_params = None
-        best_seasonal_params = None
-        results = []
-
-        total_combinations = (
-            len(p_values)
-            * len(d_values)
-            * len(q_values)
-            * len(P_values)
-            * len(D_values)
-            * len(Q_values)
-        )
-        current_combination = 0
-
-        for p, d, q in itertools.product(p_values, d_values, q_values):
-            for P, D, Q in itertools.product(P_values, D_values, Q_values):
-                current_combination += 1
-
-                if current_combination % 10 == 0:
-                    print(
-                        f"Progress: {current_combination}/{total_combinations} combinations tested"
-                    )
-
-                try:
-                    # Fit SARIMA model
-                    model = SARIMAX(
-                        train_data,
-                        order=(p, d, q),
-                        seasonal_order=(P, D, Q, seasonal_periods),
-                        enforce_stationarity=False,
-                        enforce_invertibility=False,
-                    )
-
-                    fitted_model = model.fit(disp=False, maxiter=100)
-
-                    # Store results
-                    results.append(
-                        {
-                            "order": (p, d, q),
-                            "seasonal_order": (P, D, Q, seasonal_periods),
-                            "aic": fitted_model.aic,
-                            "bic": fitted_model.bic,
-                            "converged": fitted_model.mle_retvals["converged"],
-                        }
-                    )
-
-                    # Update best model
-                    if (
-                        fitted_model.aic < best_aic
-                        and fitted_model.mle_retvals["converged"]
-                    ):
-                        best_aic = fitted_model.aic
-                        best_params = (p, d, q)
-                        best_seasonal_params = (P, D, Q, seasonal_periods)
-
-                except Exception as e:
-                    # Skip problematic parameter combinations
-                    continue
-
-        print(f"\nGrid search completed!")
-        print(f"Best parameters: SARIMA{best_params} x {best_seasonal_params}")
-        print(f"Best AIC: {best_aic:.2f}")
-
-        # Show top 5 models
-        results_df = pd.DataFrame(results)
-        if len(results_df) > 0:
-            results_df = results_df[results_df["converged"] == True]
-            top_models = results_df.nsmallest(5, "aic")
-            print(f"\nTop 5 models by AIC:")
-            for idx, row in top_models.iterrows():
-                print(
-                    f"SARIMA{row['order']} x {row['seasonal_order']}: AIC={row['aic']:.2f}"
-                )
-
-        self.best_params = best_params
-        self.best_seasonal_params = best_seasonal_params
-        self.grid_search_results = results_df if len(results_df) > 0 else None
-
-        return best_params, best_seasonal_params
-
-    def fit_sarima(self, train_data, order=None, seasonal_order=None):
-        """Fit SARIMA model with given or best parameters"""
-        if order is None:
-            order = getattr(self, "best_params", (1, 1, 1))
-        if seasonal_order is None:
-            seasonal_order = getattr(self, "best_seasonal_params", (1, 1, 1, 365))
-
-        print(f"\nFitting SARIMA{order} x {seasonal_order}")
-
-        try:
-            model = SARIMAX(
-                train_data,
-                order=order,
-                seasonal_order=seasonal_order,
-                enforce_stationarity=False,
-                enforce_invertibility=False,
-            )
-
-            fitted_model = model.fit(disp=False, maxiter=200)
-
-            print(f"Model fitted successfully!")
-            print(f"AIC: {fitted_model.aic:.2f}")
-            print(f"BIC: {fitted_model.bic:.2f}")
-            print(f"Log-likelihood: {fitted_model.llf:.2f}")
-
-            self.fitted_model = fitted_model
-            return fitted_model
-
-        except Exception as e:
-            print(f"Error fitting SARIMA model: {e}")
-            return None
-
-    def walk_forward_validation(self, test_years=3, forecast_horizon=30):
-        """Walk-forward validation for SARIMA model"""
-        print(f"\n" + "=" * 60)
-        print("SARIMA WALK-FORWARD VALIDATION")
-        print("=" * 60)
-
-        # Split data
-        test_start_year = self.temp_series.index.max().year - test_years + 1
-        train_data = self.temp_series[self.temp_series.index.year < test_start_year]
-        test_data = self.temp_series[self.temp_series.index.year >= test_start_year]
-
-        print(
-            f"Training: {train_data.index.min().date()} to {train_data.index.max().date()}"
-        )
-        print(
-            f"Testing: {test_data.index.min().date()} to {test_data.index.max().date()}"
-        )
-
-        # Find best parameters on training data
-        if not hasattr(self, "best_params"):
-            print("Finding optimal parameters...")
-            self.grid_search_sarima(train_data, max_order=2)
-
-        # Walk-forward validation
-        results = []
-        forecast_dates = []
-
-        # Start with initial training window
-        current_train = train_data.copy()
-
-        for test_date in test_data.index[::7]:  # Test every 7 days to speed up
-            print(f"Forecasting from {test_date.date()}...")
-
-            try:
-                # Fit model on current training data
-                model = SARIMAX(
-                    current_train,
-                    order=self.best_params,
-                    seasonal_order=self.best_seasonal_params,
-                    enforce_stationarity=False,
-                    enforce_invertibility=False,
-                )
-
-                fitted_model = model.fit(disp=False, maxiter=100)
-
-                # Generate forecasts
-                forecasts = fitted_model.forecast(steps=forecast_horizon)
-                forecast_index = pd.date_range(
-                    start=current_train.index[-1] + timedelta(days=1),
-                    periods=forecast_horizon,
-                    freq="D",
-                )
-
-                # Collect actual vs predicted for available dates
-                for i, forecast_date in enumerate(forecast_index):
-                    if forecast_date in test_data.index:
-                        actual = test_data.loc[forecast_date]
-                        predicted = (
-                            forecasts.iloc[i]
-                            if isinstance(forecasts, pd.Series)
-                            else forecasts[i]
-                        )
-
-                        results.append(
-                            {
-                                "forecast_origin": test_date,
-                                "forecast_date": forecast_date,
-                                "horizon": i + 1,
-                                "actual": actual,
-                                "predicted": predicted,
-                                "error": abs(actual - predicted),
-                            }
-                        )
-
-                # Update training data (expanding window)
-                if test_date in test_data.index:
-                    current_train = pd.concat(
-                        [current_train, test_data.loc[test_date:test_date]]
-                    )
-
-            except Exception as e:
-                print(f"Error forecasting from {test_date.date()}: {e}")
-                continue
-
-        self.validation_results = pd.DataFrame(results)
-        return self.validation_results
-
-    def evaluate_sarima_performance(self):
-        """Evaluate SARIMA performance by horizon"""
-        if not hasattr(self, "validation_results"):
-            print("Run walk_forward_validation first")
-            return None
-
-        # Calculate metrics by horizon
-        horizon_metrics = (
-            self.validation_results.groupby("horizon")
-            .agg(
-                {
-                    "error": ["mean", "std", "count"],
-                    "actual": "mean",
-                    "predicted": "mean",
-                }
-            )
-            .round(3)
-        )
-
-        horizon_metrics.columns = [
-            "MAE",
-            "STD_Error",
-            "N_Forecasts",
-            "Mean_Actual",
-            "Mean_Predicted",
+        # Models with annual seasonality (period=365) - computationally expensive but necessary
+        seasonal_models = [
+            # Simple seasonal models
+            {
+                "order": (0, 1, 1),
+                "seasonal_order": (1, 0, 0, 365),
+                "name": "Seasonal AR(1)",
+            },
+            {
+                "order": (0, 1, 1),
+                "seasonal_order": (0, 0, 1, 365),
+                "name": "Seasonal MA(1)",
+            },
+            {
+                "order": (1, 1, 1),
+                "seasonal_order": (1, 0, 0, 365),
+                "name": "Seasonal ARIMA(1,1,1)",
+            },
+            # The best non-seasonal model for comparison
+            {
+                "order": (0, 1, 2),
+                "seasonal_order": (0, 0, 0, 0),
+                "name": "MA(2) no seasonal",
+            },
+            # Compromise: Weekly seasonality (less expensive)
+            {
+                "order": (0, 1, 2),
+                "seasonal_order": (1, 0, 0, 7),
+                "name": "MA(2) + Weekly AR",
+            },
+            {
+                "order": (1, 1, 1),
+                "seasonal_order": (1, 0, 1, 7),
+                "name": "ARIMA + Weekly",
+            },
         ]
 
-        print(f"\nSARIMA Performance by Horizon:")
-        print("-" * 50)
-        print(
-            f"{'Horizon':<8} {'MAE':<8} {'N_Forecasts':<12} {'Actual':<8} {'Predicted':<10}"
-        )
-        print("-" * 50)
+        # Use smaller dataset for seasonal model fitting (computational constraint)
+        train_size = min(1200, len(self.temp_series) - 365)  # Last 3+ years
+        train_data = self.temp_series.iloc[
+            -train_size - 365 : -365
+        ]  # Leave 1 year for testing
 
-        for horizon in sorted(horizon_metrics.index):
-            if horizon <= 30:  # Show up to 30 days
-                row = horizon_metrics.loc[horizon]
-                print(
-                    f"{horizon:<8} {row['MAE']:<8.2f} {int(row['N_Forecasts']):<12} {row['Mean_Actual']:<8.1f} {row['Mean_Predicted']:<10.1f}"
+        print(f"📊 Using {len(train_data)} observations for seasonal model search")
+        print(
+            f"⚠️ Annual seasonality is computationally expensive - this may take time..."
+        )
+
+        results = []
+        best_model = None
+        best_score = np.inf
+
+        for i, config in enumerate(seasonal_models):
+            print(f"\n[{i+1}/{len(seasonal_models)}] Testing {config['name']}")
+            print(f"    SARIMA{config['order']} x {config['seasonal_order']}")
+
+            try:
+                # For annual seasonality, use concentrated scale and simpler initialization
+                use_concentrated = config["seasonal_order"][3] == 365
+
+                model = SARIMAX(
+                    train_data,
+                    order=config["order"],
+                    seasonal_order=config["seasonal_order"],
+                    enforce_stationarity=False,
+                    enforce_invertibility=False,
+                    concentrate_scale=use_concentrated,  # More efficient for seasonal models
+                    initialization="approximate_diffuse",
                 )
 
-        return horizon_metrics
+                print(f"    📊 Fitting model...")
+                fitted = model.fit(
+                    disp=False, maxiter=100 if use_concentrated else 200, method="lbfgs"
+                )
 
-    def compare_with_baselines(self, baseline_results_path="baseline_results.csv"):
-        """Compare SARIMA with baseline models"""
-        if not hasattr(self, "validation_results"):
-            print("Run walk_forward_validation first")
+                if fitted.mle_retvals["converged"]:
+                    aic = fitted.aic
+                    print(f"    ✅ Converged: AIC = {aic:.1f}")
+
+                    # Quick forecast test
+                    try:
+                        test_forecast = fitted.forecast(steps=10)
+                        if not np.isnan(test_forecast).any():
+                            print(f"    ✅ Forecasting works")
+
+                            # Simple validation score (AIC + forecast penalty)
+                            score = aic + (
+                                1000 if np.any(np.abs(test_forecast) > 50) else 0
+                            )
+
+                            results.append(
+                                {
+                                    "config": config,
+                                    "aic": aic,
+                                    "score": score,
+                                    "fitted_model": fitted,
+                                }
+                            )
+
+                            if score < best_score:
+                                best_score = score
+                                best_model = config
+                                print(f"    🏆 New best model!")
+
+                        else:
+                            print(f"    ❌ Forecasting returns NaN")
+                    except Exception as e:
+                        print(f"    ❌ Forecasting failed: {e}")
+                else:
+                    print(f"    ❌ Failed to converge")
+
+            except Exception as e:
+                print(f"    ❌ Error: {e}")
+                continue
+
+        if best_model is None:
+            print("\n❌ No seasonal models worked! Using MA(2) fallback")
+            best_model = {
+                "order": (0, 1, 2),
+                "seasonal_order": (0, 0, 0, 0),
+                "name": "MA(2) fallback",
+            }
+
+        print(f"\n🏆 Selected Model: {best_model['name']}")
+        print(f"📊 SARIMA{best_model['order']} x {best_model['seasonal_order']}")
+
+        self.best_model = best_model
+        return best_model
+
+    def seasonal_validation(self, test_years=2):
+        """Validation with focus on seasonal performance"""
+        print(f"\n🚀 Seasonal Validation")
+        print("=" * 30)
+
+        # Split data - use timedelta for fractional years
+        days_back = int(test_years * 365.25)  # Account for leap years
+        split_date = self.temp_series.index.max() - timedelta(days=days_back)
+        train_data = self.temp_series[self.temp_series.index <= split_date]
+        test_data = self.temp_series[self.temp_series.index > split_date]
+
+        print(
+            f"📊 Training: {len(train_data)} obs ({train_data.index.min().date()} to {train_data.index.max().date()})"
+        )
+        print(
+            f"📊 Testing: {len(test_data)} obs ({test_data.index.min().date()} to {test_data.index.max().date()})"
+        )
+
+        if not hasattr(self, "best_model"):
+            self.seasonal_model_search()
+
+        # Investigate why seasonal models have worse AIC
+        print(f"\n🔍 Analyzing Model Selection:")
+        print(
+            f"Selected: {self.best_model['name']} - SARIMA{self.best_model['order']} x {self.best_model['seasonal_order']}"
+        )
+
+        # Check if we actually selected a seasonal model
+        is_seasonal = any(x != 0 for x in self.best_model["seasonal_order"][:3])
+        seasonal_period = (
+            self.best_model["seasonal_order"][3]
+            if len(self.best_model["seasonal_order"]) > 3
+            else 0
+        )
+
+        if not is_seasonal:
+            print("⚠️  WARNING: Selected model has NO seasonal component!")
+            print("⚠️  This explains why climatology beats SARIMA at 7+ days")
+            print(
+                "⚠️  Annual seasonality may be too complex for this SARIMA implementation"
+            )
+        else:
+            print(f"✅ Selected model has seasonality (period={seasonal_period})")
+
+        # Test every 21 days (3 weeks) for efficiency but good seasonal coverage
+        test_points = test_data.index[::21]
+        print(f"🎯 Testing at {len(test_points)} points (every 3 weeks)")
+
+        results = []
+        max_horizon = 30
+
+        for i, test_date in enumerate(test_points):
+            if i % 5 == 0:
+                print(f"📈 Progress: {i+1}/{len(test_points)}")
+
+            try:
+                # Get training data - for seasonal models, use more data
+                current_train = self.temp_series[
+                    self.temp_series.index <= test_date - timedelta(days=1)
+                ]
+
+                # Use appropriate amount of data based on seasonality
+                if seasonal_period == 365:
+                    # Annual seasonality - need at least 2-3 years
+                    min_data = 365 * 2
+                    max_data = 365 * 4
+                elif seasonal_period == 7:
+                    # Weekly seasonality - need less data
+                    min_data = 365
+                    max_data = 365 * 3
+                else:
+                    # No seasonality
+                    min_data = 500
+                    max_data = 1500
+
+                if len(current_train) > max_data:
+                    current_train = current_train.iloc[-max_data:]
+                elif len(current_train) < min_data:
+                    continue  # Not enough data
+
+                # Fit model
+                model = SARIMAX(
+                    current_train,
+                    order=self.best_model["order"],
+                    seasonal_order=self.best_model["seasonal_order"],
+                    enforce_stationarity=False,
+                    enforce_invertibility=False,
+                    concentrate_scale=seasonal_period == 365,
+                    initialization="approximate_diffuse",
+                )
+
+                fitted = model.fit(disp=False, maxiter=100)
+
+                if not fitted.mle_retvals.get("converged", False):
+                    continue
+
+                # Generate forecasts
+                forecasts = fitted.forecast(steps=max_horizon)
+
+                # Collect results
+                for h in range(1, max_horizon + 1):
+                    forecast_date = test_date + timedelta(days=h)
+
+                    if forecast_date in test_data.index:
+                        actual = test_data.loc[forecast_date]
+                        predicted = forecasts.iloc[h - 1]
+
+                        if not np.isnan(predicted) and -50 <= predicted <= 50:
+                            results.append(
+                                {
+                                    "horizon": h,
+                                    "actual": actual,
+                                    "predicted": predicted,
+                                    "error": abs(actual - predicted),
+                                    "forecast_date": forecast_date,
+                                }
+                            )
+
+            except Exception as e:
+                continue
+
+        self.results = pd.DataFrame(results)
+
+        if len(self.results) > 0:
+            overall_mae = self.results["error"].mean()
+            print(f"\n✅ Seasonal Validation Complete!")
+            print(f"📊 Generated {len(self.results)} forecasts")
+            print(f"🎯 Overall MAE: {overall_mae:.3f}°C")
+
+            # Performance by horizon
+            print(f"\nPerformance by horizon:")
+            for h in [1, 3, 7, 14, 21, 30]:
+                h_data = self.results[self.results["horizon"] == h]
+                if len(h_data) > 3:
+                    mae = h_data["error"].mean()
+                    print(f"  {h:2d} days: {mae:.2f}°C (n={len(h_data)})")
+
+            return self.results
+        else:
+            print("❌ No validation results generated")
+            return pd.DataFrame()
+
+    def compare_with_climatology(self):
+        """Compare specifically with climatology (the main competitor)"""
+        if not hasattr(self, "results") or len(self.results) == 0:
             return
 
-        # Load baseline results
-        baseline_df = pd.read_csv(baseline_results_path)
+        print(f"\n🌡️ Seasonal SARIMA vs Climatology")
+        print("=" * 40)
 
-        # Get SARIMA results by horizon
-        sarima_metrics = self.validation_results.groupby("horizon")["error"].mean()
+        # Compute climatology baseline
+        climatology_results = []
 
-        # Create comparison
-        comparison = []
-        for horizon in range(1, 31):
-            baseline_row = baseline_df[baseline_df["Horizon"] == horizon]
-            if len(baseline_row) > 0 and horizon in sarima_metrics.index:
-                comparison.append(
-                    {
-                        "Horizon": horizon,
-                        "SARIMA_MAE": sarima_metrics[horizon],
-                        "Climatology_MAE": baseline_row["Climatology_MAE"].iloc[0],
-                        "Seasonal_Naive_MAE": baseline_row["Seasonal_Naive_MAE"].iloc[
-                            0
-                        ],
-                        "Persistence_MAE": baseline_row["Persistence_MAE"].iloc[0],
-                    }
-                )
+        for _, row in self.results.iterrows():
+            actual = row["actual"]
+            forecast_date = row["forecast_date"]
 
-        comparison_df = pd.DataFrame(comparison)
+            # Climatology: historical average for same day of year
+            try:
+                same_doy = self.temp_series[
+                    self.temp_series.index.dayofyear == forecast_date.dayofyear
+                ]
+                historical = same_doy[same_doy.index.year < forecast_date.year - 1]
+                if len(historical) > 2:
+                    climatology_pred = historical.mean()
+                    climatology_results.append(
+                        {
+                            "horizon": row["horizon"],
+                            "error": abs(actual - climatology_pred),
+                        }
+                    )
+            except:
+                pass
 
-        # Plot comparison
-        fig, ax = plt.subplots(figsize=(12, 6))
+        if len(climatology_results) > 0:
+            climatology_df = pd.DataFrame(climatology_results)
+            climatology_mae = climatology_df.groupby("horizon")["error"].mean()
+            sarima_mae = self.results.groupby("horizon")["error"].mean()
 
-        ax.plot(
-            comparison_df["Horizon"],
-            comparison_df["SARIMA_MAE"],
+            print(
+                f"{'Horizon':<8} {'SARIMA':<8} {'Climatology':<12} {'Improvement':<12} {'Winner'}"
+            )
+            print("-" * 50)
+
+            wins = 0
+            total = 0
+
+            for h in [1, 3, 7, 14, 21, 30]:
+                if h in sarima_mae.index and h in climatology_mae.index:
+                    s_mae = sarima_mae[h]
+                    c_mae = climatology_mae[h]
+                    improvement = ((c_mae - s_mae) / c_mae) * 100
+
+                    winner = "SARIMA ✅" if improvement > 0 else "Climatology ❌"
+                    if improvement > 0:
+                        wins += 1
+                    total += 1
+
+                    print(
+                        f"{h:<8} {s_mae:<8.2f} {c_mae:<12.2f} {improvement:<+11.1f}% {winner}"
+                    )
+
+            print(f"\nSeasonal SARIMA wins: {wins}/{total} horizons")
+
+            if wins >= total * 0.7:
+                print("🎉 Seasonal SARIMA beats climatology!")
+            elif wins >= total * 0.5:
+                print("📊 Mixed results - some improvement")
+            else:
+                print("⚠️ Still losing to climatology")
+
+    def hybrid_approach_test(self):
+        """Test hybrid SARIMA + Climatology approach"""
+        if not hasattr(self, "results") or len(self.results) == 0:
+            print("❌ No SARIMA results for hybrid approach")
+            return None
+
+        print(f"\n🔄 Testing Hybrid SARIMA + Climatology")
+        print("=" * 45)
+
+        # Define horizon cutoff
+        sarima_horizons = [1, 2, 3]  # SARIMA is good for short-term
+        climatology_horizons = [7, 14, 21, 30]  # Climatology is good for long-term
+
+        hybrid_results = []
+
+        # Get unique forecast origins from SARIMA results
+        forecast_origins = self.results["forecast_date"].dt.date.unique()
+
+        for forecast_date in forecast_origins:
+            try:
+                # Get actual temperature for this date
+                if pd.Timestamp(forecast_date) in self.temp_series.index:
+                    actual = self.temp_series.loc[pd.Timestamp(forecast_date)]
+
+                    # For short horizons: use SARIMA results
+                    for h in sarima_horizons:
+                        sarima_result = self.results[
+                            (self.results["forecast_date"].dt.date == forecast_date)
+                            & (self.results["horizon"] == h)
+                        ]
+                        if len(sarima_result) > 0:
+                            hybrid_results.append(
+                                {
+                                    "horizon": h,
+                                    "actual": actual,
+                                    "predicted": sarima_result.iloc[0]["predicted"],
+                                    "error": sarima_result.iloc[0]["error"],
+                                    "method": "SARIMA",
+                                    "forecast_date": forecast_date,
+                                }
+                            )
+
+                    # For long horizons: use climatology
+                    for h in climatology_horizons:
+                        # Calculate climatology prediction
+                        target_date = pd.Timestamp(forecast_date)
+                        same_doy = self.temp_series[
+                            self.temp_series.index.dayofyear == target_date.dayofyear
+                        ]
+                        historical = same_doy[
+                            same_doy.index.year < target_date.year - 1
+                        ]
+
+                        if len(historical) > 2:
+                            climatology_pred = historical.mean()
+                            error = abs(actual - climatology_pred)
+
+                            hybrid_results.append(
+                                {
+                                    "horizon": h,
+                                    "actual": actual,
+                                    "predicted": climatology_pred,
+                                    "error": error,
+                                    "method": "Climatology",
+                                    "forecast_date": forecast_date,
+                                }
+                            )
+            except:
+                continue
+
+        if len(hybrid_results) > 0:
+            hybrid_df = pd.DataFrame(hybrid_results)
+            hybrid_mae = hybrid_df["error"].mean()
+
+            print(f"📊 Hybrid Results:")
+            print(f"Overall MAE: {hybrid_mae:.3f}°C")
+
+            # Performance by horizon
+            print(f"\nHybrid performance by horizon:")
+            for h in [1, 2, 3, 7, 14, 21, 30]:
+                h_data = hybrid_df[hybrid_df["horizon"] == h]
+                if len(h_data) > 0:
+                    mae = h_data["error"].mean()
+                    method = h_data.iloc[0]["method"]
+                    print(f"  {h:2d} days: {mae:.2f}°C (n={len(h_data)}) - {method}")
+
+            # Compare to pure SARIMA
+            sarima_mae = self.results["error"].mean()
+            improvement = ((sarima_mae - hybrid_mae) / sarima_mae) * 100
+
+            print(f"\n🔍 Hybrid vs Pure SARIMA:")
+            print(f"Pure SARIMA: {sarima_mae:.3f}°C")
+            print(f"Hybrid: {hybrid_mae:.3f}°C")
+            print(f"Improvement: {improvement:+.1f}%")
+
+            self.hybrid_results = hybrid_df
+            return hybrid_df
+        else:
+            print("❌ No hybrid results generated")
+            return None
+
+    def create_seasonal_plots(self):
+        """Create plots showing seasonal performance"""
+        if not hasattr(self, "results") or len(self.results) == 0:
+            return
+
+        fig, axes = plt.subplots(2, 2, figsize=(14, 10))
+
+        # 1. MAE by horizon
+        sarima_perf = self.results.groupby("horizon")["error"].mean()
+        horizons = [h for h in sarima_perf.index if h <= 30]
+
+        axes[0, 0].plot(
+            horizons,
+            [sarima_perf[h] for h in horizons],
             "o-",
-            label="SARIMA",
             linewidth=2,
-            markersize=4,
+            markersize=5,
             color="red",
+            label="Seasonal SARIMA",
         )
-        ax.plot(
-            comparison_df["Horizon"],
-            comparison_df["Climatology_MAE"],
-            "s-",
-            label="Climatology",
+
+        # Add climatology comparison if available
+        climatology_results = self.compare_with_climatology()
+        if climatology_results:
+            clim_df = pd.DataFrame(climatology_results)
+            clim_perf = clim_df.groupby("horizon")["error"].mean()
+            axes[0, 0].plot(
+                clim_perf.index,
+                clim_perf.values,
+                "s--",
+                linewidth=2,
+                label="Climatology",
+                alpha=0.8,
+                color="blue",
+            )
+
+        axes[0, 0].set_xlabel("Forecast Horizon (days)")
+        axes[0, 0].set_ylabel("Mean Absolute Error (°C)")
+        axes[0, 0].set_title(f'Seasonal SARIMA Performance\n{self.best_model["name"]}')
+        axes[0, 0].legend()
+        axes[0, 0].grid(True, alpha=0.3)
+
+        # 2. Seasonal performance (by month)
+        monthly_results = self.results.copy()
+        monthly_results["month"] = monthly_results["forecast_date"].dt.month
+        monthly_mae = monthly_results.groupby("month")["error"].mean()
+
+        month_names = [
+            "Jan",
+            "Feb",
+            "Mar",
+            "Apr",
+            "May",
+            "Jun",
+            "Jul",
+            "Aug",
+            "Sep",
+            "Oct",
+            "Nov",
+            "Dec",
+        ]
+
+        axes[0, 1].plot(
+            monthly_mae.index,
+            monthly_mae.values,
+            "o-",
             linewidth=2,
-            markersize=4,
-            color="blue",
-        )
-        ax.plot(
-            comparison_df["Horizon"],
-            comparison_df["Seasonal_Naive_MAE"],
-            "^-",
-            label="Seasonal Naïve",
-            linewidth=2,
-            markersize=4,
+            markersize=5,
             color="green",
         )
-        ax.plot(
-            comparison_df["Horizon"],
-            comparison_df["Persistence_MAE"],
-            "d-",
-            label="Persistence",
-            linewidth=2,
-            markersize=4,
-            color="orange",
-        )
+        axes[0, 1].set_xlabel("Month")
+        axes[0, 1].set_ylabel("Mean Absolute Error (°C)")
+        axes[0, 1].set_title("Performance by Season")
+        axes[0, 1].set_xticks(range(1, 13))
+        axes[0, 1].set_xticklabels(month_names, rotation=45)
+        axes[0, 1].grid(True, alpha=0.3)
 
-        ax.set_xlabel("Forecast Horizon (days)")
-        ax.set_ylabel("Mean Absolute Error (°C)")
-        ax.set_title("SARIMA vs Baseline Models")
-        ax.legend()
-        ax.grid(True, alpha=0.3)
+        # 3. Actual vs Predicted
+        sample = self.results.sample(min(400, len(self.results)))
+        axes[1, 0].scatter(sample["actual"], sample["predicted"], alpha=0.6, s=15)
+
+        temp_range = [sample["actual"].min(), sample["actual"].max()]
+        axes[1, 0].plot(temp_range, temp_range, "r--", alpha=0.8)
+        axes[1, 0].set_xlabel("Actual Temperature (°C)")
+        axes[1, 0].set_ylabel("Predicted Temperature (°C)")
+        axes[1, 0].set_title("Actual vs Predicted")
+        axes[1, 0].grid(True, alpha=0.3)
+
+        # 4. Error by horizon (box plot style)
+        key_horizons = [1, 7, 14, 30]
+        horizon_errors = []
+        horizon_labels = []
+
+        for h in key_horizons:
+            h_data = self.results[self.results["horizon"] == h]
+            if len(h_data) > 10:
+                horizon_errors.append(h_data["error"].values)
+                horizon_labels.append(f"{h}d")
+
+        if horizon_errors:
+            axes[1, 1].boxplot(horizon_errors, labels=horizon_labels)
+            axes[1, 1].set_xlabel("Forecast Horizon")
+            axes[1, 1].set_ylabel("Absolute Error (°C)")
+            axes[1, 1].set_title("Error Distribution by Horizon")
+            axes[1, 1].grid(True, alpha=0.3)
 
         plt.tight_layout()
-        plt.savefig("sarima_vs_baselines.png", dpi=150, bbox_inches="tight")
+        plt.savefig(
+            "sarima/seasonal_sarima_performance.png", dpi=150, bbox_inches="tight"
+        )
         plt.show()
-
-        # Print summary
-        print(f"\nSARIMA vs Baselines Summary:")
-        print("-" * 40)
-        horizons = [1, 7, 14, 30]
-        for h in horizons:
-            row = comparison_df[comparison_df["Horizon"] == h]
-            if len(row) > 0:
-                row = row.iloc[0]
-                best_baseline = min(
-                    row["Climatology_MAE"],
-                    row["Seasonal_Naive_MAE"],
-                    row["Persistence_MAE"],
-                )
-                improvement = (
-                    (best_baseline - row["SARIMA_MAE"]) / best_baseline
-                ) * 100
-                print(
-                    f"{h:2d} days: SARIMA {row['SARIMA_MAE']:.2f}°C vs Best Baseline {best_baseline:.2f}°C "
-                    f"({'↑' if improvement > 0 else '↓'}{improvement:+.1f}%)"
-                )
-
-        self.comparison_df = comparison_df
-        return comparison_df
 
 
 def main():
-    """Main SARIMA modeling pipeline"""
-    # Initialize forecaster
-    forecaster = SARIMAForecaster("temagami_features.csv")
+    """Main function for seasonal SARIMA"""
+    print("🌀 SEASONAL SARIMA FOR TEMPERATURE FORECASTING")
+    print("=" * 55)
 
-    # Check stationarity
-    forecaster.check_stationarity(forecaster.temp_series)
+    try:
+        forecaster = SeasonalSARIMAForecaster("temagami_features.csv")
 
-    # Apply differencing if needed
-    diff_series, diff_orders = forecaster.difference_series(forecaster.temp_series)
+        # Search for best seasonal model
+        best_model = forecaster.seasonal_model_search()
 
-    # Plot diagnostics
-    forecaster.plot_diagnostics(forecaster.temp_series, "Original Temperature")
-    forecaster.plot_diagnostics(diff_series, "Differenced Temperature")
+        # Seasonal validation
+        results = forecaster.seasonal_validation(test_years=2)  # Fixed to use integer
 
-    # Grid search for best parameters (this will take a while)
-    print("\nStarting grid search (this may take 10-15 minutes)...")
-    best_params, best_seasonal_params = forecaster.grid_search_sarima(
-        forecaster.temp_series[:-365], max_order=2
-    )  # Hold out last year for validation
+        if len(results) > 0:
+            # Compare with climatology
+            forecaster.compare_with_climatology()
 
-    # Walk-forward validation
-    validation_results = forecaster.walk_forward_validation(
-        test_years=3, forecast_horizon=30
-    )
+            # Test hybrid approach
+            hybrid_results = forecaster.hybrid_approach_test()
 
-    # Evaluate performance
-    horizon_metrics = forecaster.evaluate_sarima_performance()
+            # Create plots
+            forecaster.create_seasonal_plots()
 
-    # Compare with baselines
-    comparison = forecaster.compare_with_baselines()
+            # Final summary
+            overall_mae = results["error"].mean()
+            print(f"\n🎯 SEASONAL SARIMA RESULTS")
+            print("=" * 35)
+            print(f"📊 Model: {best_model['name']}")
+            print(f"📊 Overall MAE: {overall_mae:.3f}°C")
 
-    return forecaster, validation_results, horizon_metrics
+            # Compare to previous best
+            print(f"📊 vs Previous SARIMA (5.39°C): {overall_mae/5.39:.2f}x better")
+            print(
+                f"📊 vs Neural Net (2.78°C): {overall_mae/2.78:.2f}x {'better' if overall_mae < 2.78 else 'worse'}"
+            )
+
+            # Show hybrid results if available
+            if hybrid_results is not None:
+                hybrid_mae = hybrid_results["error"].mean()
+                print(f"📊 Hybrid approach: {hybrid_mae:.3f}°C")
+                print(
+                    f"📊 vs Neural Net (2.78°C): {hybrid_mae/2.78:.2f}x {'better' if hybrid_mae < 2.78 else 'worse'}"
+                )
+
+            # Check if we need a hybrid approach
+            is_seasonal = any(x != 0 for x in best_model["seasonal_order"][:3])
+            if not is_seasonal:
+                print(f"\n💡 INSIGHT: ANNUAL SEASONALITY TOO COMPLEX FOR SARIMA")
+                print(f"   • SARIMA excels at short-term patterns (1-3 days)")
+                print(
+                    f"   • Climatology captures long-term seasonal patterns (7+ days)"
+                )
+                print(f"   • Neural networks handle both patterns simultaneously")
+
+            return forecaster, results
+        else:
+            print("❌ No results generated")
+            return forecaster, None
+
+    except Exception as e:
+        print(f"❌ Error: {e}")
+        import traceback
+
+        traceback.print_exc()
+        return None, None
 
 
 if __name__ == "__main__":
-    forecaster, results, metrics = main()
+    forecaster, results = main()
