@@ -1,4 +1,6 @@
 ![Pepe](pepe.jpg)
+![ML Comprehensive Analysis](ml/ml_comprehensive_analysis.png)
+![ML Detailed Performance](ml/ml_detailed_performance.png)
 ![LSTM Comprehensive Analysis](lstm/lstm_comprehensive_analysis.png)
 ![SARIMA Comprehensive Analysis](sarima/optimized_sarima_comprehensive.png)
 
@@ -26,11 +28,21 @@ A professional-grade, end-to-end weather forecasting pipeline that downloads his
 | Method                    | Overall MAE | Max Temp MAE | Min Temp MAE | Mean Temp MAE | Notes                        |
 | ------------------------- | ----------- | ------------ | ------------ | ------------- | ---------------------------- |
 | **Neural Network (This)** | **2.78°C**  | **3.46°C**   | **2.79°C**   | **2.10°C**    | 🥇 Best performance          |
-| Prophet Baseline          | 4.09°C      | 4.85°C       | 4.12°C       | 3.31°C        | 📊 Strong traditional method |
-| Climatological Baseline   | 4.40°C      | 5.21°C       | 4.67°C       | 3.32°C        | 📊 Historical averages       |
 | Persistence Model         | 3.17°C      | 3.89°C       | 3.42°C       | 2.20°C        | 📊 Simple "tomorrow = today" |
+| Prophet Baseline          | 4.09°C      | 4.85°C       | 4.12°C       | 3.31°C        | 📊 Strong traditional method |
+| SARIMA (Hybrid)           | 4.16°C      | N/A          | N/A          | N/A           | 🌀 SARIMA + Climatology mix  |
+| Climatological Baseline   | 4.40°C      | 5.21°C       | 4.67°C       | 3.32°C        | 📊 Historical averages       |
+| SARIMA (Pure)             | 5.19°C      | N/A          | N/A          | N/A           | 🌀 MA(2) no seasonal         |
 
-> **Multi-Temperature Advantage**: Our system provides complete daily temperature profiles rather than single-point estimates, giving you the full temperature range for better planning.
+### Comparative Model Analysis
+
+**Why Neural Networks Outperform Traditional Methods:**
+
+- **SARIMA Limitations**: Traditional SARIMA models struggle with annual seasonality (365-day cycles). The optimal SARIMA model was MA(2) with no seasonal component, explaining poor long-term performance (7.45°C MAE at 30 days vs 3.58°C at 1 day).
+
+- **Hybrid Approaches**: Combining SARIMA (short-term) with climatology (long-term) improved overall performance from 5.19°C to 4.16°C, but still significantly trails neural networks.
+
+- **Neural Network Advantages**: Simultaneously captures both short-term autocorrelations and complex seasonal patterns through multi-dimensional feature engineering and non-linear transformations.
 
 ## 🚀 Quick Start
 
@@ -398,24 +410,17 @@ The system employs rigorous time-series validation for multi-temperature forecas
 3. **Feature Generation**: Historical data only (no look-ahead bias)
 4. **Cross-validation**: Multiple forecast origins tested for each temperature type
 5. **Relationship Validation**: Ensures max ≥ mean ≥ min in all forecasts
-6. **Comparison**: Benchmarked against Prophet, climatology, and persistence for each temperature type
-
-## 🐛 Troubleshooting
-
-### Common Issues
+6. **Comprehensive Benchmarking**: Compared against:
+   - **SARIMA**: Traditional time-series approach (MA(2) and hybrid variants)
+   - **Prophet**: Facebook's forecasting tool with automatic seasonality detection
+   - **Climatology**: Historical averages by day-of-year
+   - **Persistence**: Simple "tomorrow equals today" baseline
 
 **"No trained model found"**
 
 ```bash
-# Solution: Train a multi-temperature model first
+# Solution: Train a model first
 python weather_forecast.py --station-id 47687 --location "Temagami, ON"
-```
-
-**"Model is not multi-output format"**
-
-```bash
-# Solution: Retrain with latest pipeline for multi-temperature support
-python weather_forecast.py --station-id 47687 --location "Temagami, ON" --force-download
 ```
 
 **"No data available for date"**
